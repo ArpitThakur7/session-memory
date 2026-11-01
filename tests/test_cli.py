@@ -60,7 +60,7 @@ def test_prompt_hook_blocks_cold_large_chat(tmp_path):
     out = run(["hook-prompt"], hook_input(tmp_path, prompt="continue"), now=datetime(2026, 11, 1, 14, 0, tzinfo=timezone.utc), min_tokens=1000)
     assert json.loads(out)["decision"] == "block"
     assert "reason" in json.loads(out)
-    state = json.loads((tmp_path / "proj/.claude/session-memory/state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / "proj/.claude/session-memory/guard.json").read_text(encoding="utf-8"))
     assert "guard" in state
 
 
@@ -121,3 +121,18 @@ def test_non_ascii_prompt_and_brief_survive(tmp_path):  # R8
     out = run(["hook-session-start"], stdin)
     out.encode("ascii")  # ensure_ascii=True
     assert prompt in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_prompt_hook_keeps_guard_state_in_guard_json_only(tmp_path):   # M2
+    import hashlib
+    now = datetime(2026, 11, 1, 14, 0, tzinfo=timezone.utc)
+    mem = tmp_path / "proj/.claude/session-memory"
+    mem.mkdir(parents=True)
+    # A matching guard entry in state.json must be ignored: the hook reads only guard.json.
+    stale = {"offsets": {"x.jsonl": 3},
+             "guard": {"hash": hashlib.sha1(b"continue").hexdigest(), "at": now.isoformat()}}
+    (mem / "state.json").write_text(json.dumps(stale), encoding="utf-8")
+    out = run(["hook-prompt"], hook_input(tmp_path, prompt="continue"), now=now, min_tokens=1000)
+    assert json.loads(out)["decision"] == "block"
+    assert json.loads((mem / "state.json").read_text(encoding="utf-8")) == stale
+    assert "guard" in json.loads((mem / "guard.json").read_text(encoding="utf-8"))

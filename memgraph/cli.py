@@ -55,10 +55,10 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
     else:  # hook-prompt
-        state = load_state(mem / "state.json")
+        state = load_state(mem / "guard.json")  # own file: never races ingest's state.json
         last_ts, context = last_activity(Path(payload["transcript_path"]))
         reason = decide(now, last_ts, context, payload.get("prompt") or "", state, GuardConfig.from_env())
-        save_state(mem / "state.json", state)
+        save_state(mem / "guard.json", state)
         if reason:
             _emit(stdout, {"decision": "block", "reason": reason})
 

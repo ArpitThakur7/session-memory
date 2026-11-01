@@ -170,3 +170,59 @@ def test_env_overrides(monkeypatch):
     monkeypatch.setenv("SESSION_MEMORY_IDLE_MIN", "30"); monkeypatch.setenv("SESSION_MEMORY_MIN_TOKENS", "abc")
     cfg = GuardConfig.from_env()
     assert (cfg.idle_minutes, cfg.min_tokens) == (30, 30000)
+
+
+def _line(**obj):
+    return json.dumps(obj)
+
+
+REAL = _line(type="assistant", timestamp="2026-11-01T10:00:00.000Z",
+             message={"model": "claude-opus", "usage": {"input_tokens": 3, "cache_read_input_tokens": 140000}})
+SYNTHETIC_LINES = [
+    _line(type="assistant", timestamp="2026-11-01T11:50:00.000Z",
+          message={"model": "<synthetic>", "content": [{"type": "text", "text": "x"}],
+                   "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                             "cache_creation_input_tokens": 0}}),
+    _line(type="assistant", timestamp="2026-11-01T11:50:00.000Z", isApiErrorMessage=True,
+          message={"model": "claude-opus", "usage": {"input_tokens": 9}}),
+    _line(type="assistant", timestamp="2026-11-01T11:50:00.000Z",
+          message={"model": "claude-opus", "usage": {"input_tokens": 0, "output_tokens": 4}}),
+]
+
+
+def test_last_activity_ignores_synthetic_lines(tmp_path):             # C1
+    for synthetic in SYNTHETIC_LINES:
+        f = tmp_path / "t.jsonl"
+        f.write_text(REAL + "\n" + synthetic + "\n", encoding="utf-8")
+        assert last_activity(f) == (datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc), 140003)
+
+
+def test_guard_fires_after_a_usage_limit_message(tmp_path):            # C1
+    f = tmp_path / "t.jsonl"
+    f.write_text(REAL + "\n" + SYNTHETIC_LINES[0] + "\n", encoding="utf-8")
+    last_ts, ctx = last_activity(f)
+    assert decide(NOW, last_ts, ctx, "continue", {}, GuardConfig()) is not None
+
+
+def test_allows_prompts_starting_with_angle_bracket():                 # I4
+    old = NOW - timedelta(hours=5)
+    for p in ("<task-notification>done</task-notification>", "  \n<system-reminder>x"):
+        assert decide(NOW, old, 140000, p, {}, GuardConfig()) is None
+
+
+COMPACT = _line(type="system", subtype="compact_boundary", timestamp="2026-11-01T10:30:00.000Z", content="c")
+
+
+def test_compact_boundary_resets_context_and_counts_as_activity(tmp_path):   # I5
+    f = tmp_path / "t.jsonl"
+    f.write_text(REAL + "\n" + COMPACT + "\n", encoding="utf-8")
+    last_ts, ctx = last_activity(f)
+    assert (last_ts, ctx) == (datetime(2026, 11, 1, 10, 30, tzinfo=timezone.utc), None)
+    assert decide(NOW, last_ts, ctx, "continue", {}, GuardConfig()) is None
+
+
+def test_reply_after_compact_boundary_sets_context_again(tmp_path):    # I5
+    after = _line(type="assistant", timestamp="2026-11-01T10:31:00.000Z", message={"usage": {"input_tokens": 20000}})
+    f = tmp_path / "t.jsonl"
+    f.write_text(REAL + "\n" + COMPACT + "\n" + after + "\n", encoding="utf-8")
+    assert last_activity(f) == (datetime(2026, 11, 1, 10, 31, tzinfo=timezone.utc), 20000)

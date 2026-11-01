@@ -3,11 +3,23 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable
 
 _MAX_TEXT = 200
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
+
+
+def parse_ts(value) -> datetime | None:
+    """Aware UTC datetime from an ISO string (naive means UTC); None if unparseable."""
+    if not isinstance(value, str):
+        return None
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -83,7 +95,26 @@ def _parse_user(msg: dict, obj: dict, ts: str, session: str) -> list[Event]:
     return events
 
 
-def _parse_assistant(msg: dict, ts: str, session: str) -> list[Event]:
+_CONTEXT_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def is_synthetic(obj: dict) -> bool:
+    """True for assistant lines Claude Code writes itself, not model replies.
+
+    "No response requested.", "API Error: ..." and usage-limit notices carry
+    model "<synthetic>", isApiErrorMessage, and/or an all-zero input usage.
+    They must not count as activity or as the chat's context size.
+    """
+    msg = obj.get("message")
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("model") == "<synthetic>" or obj.get("isApiErrorMessage") is True:
+        return True
+    usage = msg.get("usage")
+    return isinstance(usage, dict) and sum(usage.get(k) or 0 for k in _CONTEXT_FIELDS) == 0
+
+
+def _parse_assistant(msg: dict, obj: dict, ts: str, session: str) -> list[Event]:
     events: list[Event] = []
     for block in _blocks(msg.get("content")):
         if block.get("type") == "tool_use":
@@ -91,11 +122,8 @@ def _parse_assistant(msg: dict, ts: str, session: str) -> list[Event]:
             if event is not None:
                 events.append(event)
     usage = msg.get("usage")
-    if isinstance(usage, dict):
-        context = sum(
-            usage.get(k) or 0
-            for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-        )
+    if isinstance(usage, dict) and not is_synthetic(obj):
+        context = sum(usage.get(k) or 0 for k in _CONTEXT_FIELDS)
         events.append(Event("usage", ts, session, {"context": context}))
     return events
 
@@ -117,7 +145,7 @@ def parse_line(line: str) -> list[Event]:
     if kind == "user":
         return _parse_user(msg, obj, ts, session)
     if kind == "assistant":
-        return _parse_assistant(msg, ts, session)
+        return _parse_assistant(msg, obj, ts, session)
     return []
 
 

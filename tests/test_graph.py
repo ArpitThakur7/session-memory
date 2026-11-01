@@ -131,3 +131,11 @@ def test_write_json_atomic_cleans_up_on_failure(tmp_path):
     assert not p.exists() and not list(p.parent.glob("*.tmp"))
     write_json_atomic(p, {"ok": 1})
     assert json.loads(p.read_text(encoding="utf-8")) == {"ok": 1}
+
+
+def test_usage_without_context_keeps_stored_context():                # C1
+    g = Graph()
+    g.apply(Event("usage", "t1", "s", {"context": 5000}))
+    g.apply(Event("usage", "t2", "s", {"context": None}))
+    g.apply(Event("usage", "t3", "s", {}))
+    assert g.meta["sessions"]["s"]["context"] == 5000

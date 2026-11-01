@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memgraph.transcript import parse_line
+from memgraph.transcript import is_synthetic, parse_line, parse_ts
 
 _TAIL_BYTES = 256 * 1024
 
@@ -43,17 +43,6 @@ class GuardConfig:
         )
 
 
-def _parse_ts(value) -> datetime | None:
-    """Aware UTC datetime from an ISO string (naive means UTC); None if unparseable."""
-    if not isinstance(value, str):
-        return None
-    try:
-        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-
-
 def _tail_lines(path: Path) -> list[str]:
     with open(path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
@@ -67,7 +56,13 @@ def _tail_lines(path: Path) -> list[str]:
 
 
 def last_activity(transcript_path: Path) -> tuple[datetime | None, int | None]:
-    """(UTC time of the newest assistant line, newest usage context) from the file's last 256 KB."""
+    """(UTC time of the newest activity, newest usage context) from the file's last 256 KB.
+
+    Activity is a model reply (assistant line) or a compaction (system line with
+    subtype "compact_boundary", which also resets the context to None because the
+    old history is gone). Synthetic assistant lines (usage-limit notices, API
+    errors, "No response requested.") are ignored for both.
+    """
     try:
         lines = _tail_lines(Path(transcript_path))
     except Exception:
@@ -76,18 +71,26 @@ def last_activity(transcript_path: Path) -> tuple[datetime | None, int | None]:
     context: int | None = None
     for line in lines:
         try:
-            events = parse_line(line)
             obj = json.loads(line)
-            ts = _parse_ts(obj.get("timestamp")) if obj.get("type") == "assistant" else None
-            line_context = None
-            for ev in events:
-                if ev.kind == "usage" and isinstance(ev.data.get("context"), int):
-                    line_context = ev.data["context"]
+            if not isinstance(obj, dict):
+                continue
+            kind = obj.get("type")
+            if kind == "system" and obj.get("subtype") == "compact_boundary":
+                ts, compacted, line_context = parse_ts(obj.get("timestamp")), True, None
+            elif kind == "assistant" and not is_synthetic(obj):
+                ts, compacted, line_context = parse_ts(obj.get("timestamp")), False, None
+                for ev in parse_line(line):
+                    if ev.kind == "usage" and isinstance(ev.data.get("context"), int):
+                        line_context = ev.data["context"]
+            else:
+                continue
         except Exception:
             continue
         if ts is not None and (newest is None or ts > newest):
             newest = ts
-        if line_context is not None:
+        if compacted:
+            context = None
+        elif line_context is not None:
             context = line_context
     return newest, context
 
@@ -105,8 +108,10 @@ def decide(
     cfg: GuardConfig,
 ) -> str | None:
     """The block reason, or None to allow. Records/clears state["guard"]."""
-    if last_ts is None or context is None or prompt.startswith("/"):
+    if last_ts is None or context is None:
         return None
+    if prompt.startswith("/") or prompt.lstrip().startswith("<"):
+        return None  # slash commands; task notifications, agent reports, cross-session messages
     now, last_ts = _utc(now), _utc(last_ts)
     idle = now - last_ts
     if idle <= timedelta(minutes=cfg.idle_minutes) or context <= cfg.min_tokens:
@@ -115,7 +120,7 @@ def decide(
     digest = hashlib.sha1(prompt.strip().encode("utf-8")).hexdigest()
     prev = state.get("guard")
     if isinstance(prev, dict) and prev.get("hash") == digest:
-        at = _parse_ts(prev.get("at"))
+        at = parse_ts(prev.get("at"))
         if at is not None and now - at <= timedelta(minutes=cfg.repeat_window_minutes):
             del state["guard"]
             return None

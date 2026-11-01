@@ -34,3 +34,35 @@ def test_ignored_lines():
 def test_long_text_truncated_to_200():
     line = json.dumps({"type": "user", "sessionId": "s", "timestamp": "t", "message": {"content": "x" * 500}})
     assert len(parse_line(line)[0].data["text"]) == 200
+
+
+def _assistant_line(model="claude-opus", usage=None, api_error=False, text="hi"):
+    obj = {"type": "assistant", "sessionId": "s", "timestamp": "2026-11-01T12:00:00.000Z",
+           "message": {"model": model, "content": [{"type": "text", "text": text}]}}
+    if usage is not None:
+        obj["message"]["usage"] = usage
+    if api_error:
+        obj["isApiErrorMessage"] = True
+    return json.dumps(obj)
+
+
+ZERO_USAGE = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+REAL_USAGE = {"input_tokens": 5, "cache_read_input_tokens": 90000, "cache_creation_input_tokens": 100}
+
+
+def test_synthetic_assistant_lines_emit_no_usage():                    # C1
+    for line in (
+        _assistant_line(model="<synthetic>", usage=REAL_USAGE),
+        _assistant_line(usage=REAL_USAGE, api_error=True),
+        _assistant_line(usage=ZERO_USAGE),
+    ):
+        assert [e for e in parse_line(line) if e.kind == "usage"] == []
+
+
+def test_is_synthetic():                                               # C1
+    from memgraph.transcript import is_synthetic
+    assert is_synthetic(json.loads(_assistant_line(model="<synthetic>")))
+    assert is_synthetic(json.loads(_assistant_line(api_error=True)))
+    assert is_synthetic(json.loads(_assistant_line(usage=ZERO_USAGE)))
+    assert not is_synthetic(json.loads(_assistant_line(usage=REAL_USAGE)))
+    assert not is_synthetic(json.loads(_assistant_line()))  # no usage at all: a normal streamed line

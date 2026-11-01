@@ -131,7 +131,8 @@ class Graph:
             self.meta.setdefault("todos", {})[sid] = items
             self.meta["last_todos"] = {"session": sid, "ts": ts, "items": items}
         elif kind == "usage":
-            sess["context"] = data.get("context")
+            if isinstance(data.get("context"), int):
+                sess["context"] = data["context"]
 
     def _remember_tool(self, tool_id, node_id: str) -> None:
         if not tool_id:
