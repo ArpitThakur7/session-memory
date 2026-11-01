@@ -28,6 +28,17 @@ The memory folder ignores itself in git: the plugin writes a `.gitignore` contai
 
 - `/remember <decision>` saves one line, "decision because reason", to project memory. Use it for the "why" behind choices.
 - `/recall <word>` searches project memory for older details that are not in the brief.
+- `/memory-map` opens a 3D map of the project's memory (see below).
+
+## See your memory
+
+`/memory-map` opens a 3D map of the project's memory in your browser. From a terminal, `bin/run-python map` does the same and costs no tokens at all (`bin/run-python map --no-open` only writes the file).
+
+- Drag to rotate, scroll or pinch to zoom, right-drag (or Shift-drag) to pan, double-click empty space to fit everything.
+- Each session is a gray dot, with its requests around it. Click a dot to open it: its files, commands, errors and decisions burst out of it, and the side panel shows its full text, when it was seen and what it is connected to. Click it again to fold it back up. A "+N" badge means there is more inside. A dashed ring stands for "+K more", and clicking it shows the rest.
+- Search covers everything, including folded-up parts: click a result to fly to it. The colored chips hide or show a kind of item. "Where you left off" repeats the brief.
+
+The page is one self-contained file, `.claude/session-memory/memory-map.html`. It loads nothing from the network and is git-ignored like the rest of the memory folder. Run the command again to refresh it.
 
 ## Configuration
 

@@ -1,4 +1,4 @@
-"""Command line entry point: Claude Code hooks plus remember/recall/stats."""
+"""Command line entry point: Claude Code hooks plus remember/recall/stats/map."""
 from __future__ import annotations
 
 import io
@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import traceback
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
@@ -15,6 +16,7 @@ from memgraph.brief import build_brief
 from memgraph.graph import Graph, _digest
 from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, save_state
+from memgraph.viewer import write_map
 
 _RECALL_MAX_CHARS = 2000
 
@@ -121,6 +123,16 @@ def _stats(stdout: TextIO) -> int:
     return 0
 
 
+def _map(args: list[str], stdout: TextIO) -> int:
+    project = Path.cwd()
+    mem, graph = _project()
+    path = write_map(graph, mem, project.name, project)
+    stdout.write(f"Memory map: {path}\n")
+    if "--no-open" not in args:
+        webbrowser.open(path.as_uri())
+    return 0
+
+
 def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     cmd, args = (argv[0], argv[1:]) if argv else ("", [])
@@ -141,7 +153,9 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _recall(args, stdout)
     if cmd == "stats":
         return _stats(stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats)\n")
+    if cmd == "map":
+        return _map(args, stdout)
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open])\n")
     return 2
 
 

@@ -154,3 +154,24 @@ def test_session_start_brief_lists_files_relative_to_cwd(tmp_path):   # I3
     stdin = json.dumps({"session_id": "s3", "transcript_path": str(tdir / "t.jsonl"), "cwd": str(cwd)})
     ctx = json.loads(run(["hook-session-start"], stdin))["hookSpecificOutput"]["additionalContext"]
     assert "- src/app.py" in ctx and "x.py" not in ctx
+
+
+def test_map_no_open_prints_path_and_does_not_open(tmp_path, monkeypatch):
+    run(["hook-stop"], hook_input(tmp_path))
+    monkeypatch.chdir(tmp_path / "proj")
+    opened = []
+    monkeypatch.setattr("memgraph.cli.webbrowser.open", lambda url: opened.append(url))
+    out = run(["map", "--no-open"], "")
+    path = tmp_path / "proj/.claude/session-memory/memory-map.html"
+    assert out == f"Memory map: {path}\n"
+    assert path.exists() and opened == []
+
+
+def test_map_opens_browser_with_file_uri(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    opened = []
+    monkeypatch.setattr("memgraph.cli.webbrowser.open", lambda url: opened.append(url))
+    out = run(["map"], "")
+    path = tmp_path / ".claude/session-memory/memory-map.html"
+    assert out == f"Memory map: {path}\n"
+    assert opened == [path.as_uri()] and opened[0].startswith("file:")
