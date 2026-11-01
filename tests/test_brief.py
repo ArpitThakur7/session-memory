@@ -38,7 +38,7 @@ def test_layout_order_and_timestamp_format():
     assert lines[0] == "# Project memory (auto-loaded by session-memory)"
     assert lines[1].startswith("Last request (2026-11-01 ")
     heads = [ln for ln in lines if ln.startswith("## ")]
-    assert heads == ["## Next steps", "## Decisions", "## Recently changed files", "## Recent errors"]
+    assert heads == ["## Next steps (as of 2026-11-01 10:00)", "## Decisions", "## Recently changed files", "## Recent errors"]
     assert lines[-1] == "For older details run /recall <word>. Do not re-read files listed here unless needed."
 
 
@@ -104,3 +104,18 @@ def test_unparseable_timestamp_left_as_is():
     g.meta["last_prompt"] = {"text": "hi", "ts": "yesterday", "session": "s"}
     g.add_node("decision", "d", "x", "")
     assert "Last request (yesterday): hi" in build_brief(g)
+
+
+
+def test_next_steps_heading_shows_todo_time():                      # I2
+    assert "## Next steps (as of 2026-11-01 10:00)" in build_brief(graph_from_fixture()).splitlines()
+
+
+def test_finished_steps_from_plan_deltas_are_not_listed():           # I2
+    from memgraph.transcript import Event
+    g = graph_from_fixture()
+    g.apply(Event("todo_delta", "2026-11-01T10:10:00Z", "s1",
+                  {"advance": True, "done": [], "start": None, "complete_all": False}))
+    b = build_brief(g)
+    assert "Fix login test" not in b and "- [in_progress] Add logout" in b
+    assert "## Next steps (as of 2026-11-01 10:10)" in b

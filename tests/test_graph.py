@@ -139,3 +139,67 @@ def test_usage_without_context_keeps_stored_context():                # C1
     g.apply(Event("usage", "t2", "s", {"context": None}))
     g.apply(Event("usage", "t3", "s", {}))
     assert g.meta["sessions"]["s"]["context"] == 5000
+
+
+
+def test_last_prompt_replaced_only_by_newer_or_equal_ts():             # I1
+    g = Graph()
+    g.apply(Event("prompt", "2026-11-01T12:00:00.000Z", "new", {"text": "newer"}))
+    g.apply(Event("prompt", "2026-11-01T10:00:00.000Z", "old", {"text": "older"}))
+    assert g.meta["last_prompt"]["text"] == "newer"
+    g.apply(Event("prompt", None, "x", {"text": "no ts"}))
+    g.apply(Event("prompt", "garbage", "x", {"text": "bad ts"}))
+    assert g.meta["last_prompt"]["text"] == "newer"
+    g.apply(Event("prompt", "2026-11-01T12:00:00Z", "new", {"text": "same time"}))
+    assert g.meta["last_prompt"]["text"] == "same time"
+
+
+def test_last_todos_replaced_only_by_newer_ts_but_per_session_todos_always():   # I1
+    g = Graph()
+    newer = [{"content": "n", "status": "pending"}]
+    older = [{"content": "o", "status": "pending"}]
+    g.apply(Event("todo", "2026-11-01T12:00:00Z", "new", {"items": newer}))
+    g.apply(Event("todo", "2026-11-01T10:00:00Z", "old", {"items": older}))
+    assert g.meta["last_todos"]["session"] == "new" and g.meta["last_todos"]["items"] == newer
+    assert g.meta["todos"]["old"] == older
+
+
+def _todo_graph(statuses, session="s"):
+    g = Graph()
+    items = [{"content": f"t{i + 1}", "status": st} for i, st in enumerate(statuses)]
+    g.apply(Event("todo", "2026-11-01T10:00:00Z", session, {"items": items}))
+    return g
+
+
+def _delta(advance=False, done=(), start=None, complete_all=False):
+    return {"advance": advance, "done": list(done), "start": start, "complete_all": complete_all}
+
+
+def _statuses(items):
+    return [i["status"] for i in items]
+
+
+def test_todo_delta_advance_moves_one_step_in_both_lists():          # I2
+    g = _todo_graph(["completed", "in_progress", "pending", "pending"])
+    g.apply(Event("todo_delta", "2026-11-01T10:05:00Z", "s", _delta(advance=True)))
+    want = ["completed", "completed", "in_progress", "pending"]
+    assert _statuses(g.meta["todos"]["s"]) == want and _statuses(g.meta["last_todos"]["items"]) == want
+    assert g.meta["last_todos"]["ts"] == "2026-11-01T10:05:00Z"
+
+
+def test_todo_delta_done_start_and_complete_all():                   # I2
+    g = _todo_graph(["pending", "pending", "pending", "pending"])
+    g.apply(Event("todo_delta", "2026-11-01T10:05:00Z", "s", _delta(done=[1, 2, 9], start=4)))
+    assert _statuses(g.meta["last_todos"]["items"]) == ["completed", "completed", "pending", "in_progress"]
+    g.apply(Event("todo_delta", "2026-11-01T10:06:00Z", "s", _delta(complete_all=True)))
+    assert set(_statuses(g.meta["last_todos"]["items"])) == {"completed"}
+    assert set(_statuses(g.meta["todos"]["s"])) == {"completed"}
+
+
+def test_todo_delta_of_other_session_leaves_last_todos_alone():      # I2
+    g = _todo_graph(["in_progress", "pending"], session="a")
+    g.apply(Event("todo", "2026-11-01T11:00:00Z", "b", {"items": [{"content": "b1", "status": "in_progress"}]}))
+    g.apply(Event("todo_delta", "2026-11-01T11:05:00Z", "a", _delta(advance=True)))
+    assert _statuses(g.meta["todos"]["a"]) == ["completed", "in_progress"]
+    assert g.meta["last_todos"]["session"] == "b" and _statuses(g.meta["last_todos"]["items"]) == ["in_progress"]
+    g.apply(Event("todo_delta", "2026-11-01T11:06:00Z", "nobody", _delta(advance=True)))  # no todos: no crash

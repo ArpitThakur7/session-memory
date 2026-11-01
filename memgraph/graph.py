@@ -7,10 +7,53 @@ import os
 import tempfile
 from pathlib import Path
 
-from memgraph.transcript import Event
+from memgraph.transcript import Event, parse_ts
 
 _MAX_TOOL_NODES = 500
 _MAX_LABEL = 200
+
+
+def _is_newer(ts, stored) -> bool:
+    """May an event at `ts` replace the dict `stored` (which has a "ts")?
+
+    Yes when nothing is stored yet, or when `ts` parses and is at or after the
+    stored time (a stored value with an unparseable time is replaceable). An
+    event whose own time is missing or unparseable never replaces a value.
+    """
+    if not isinstance(stored, dict):
+        return True
+    new = parse_ts(ts)
+    if new is None:
+        return False
+    old = parse_ts(stored.get("ts"))
+    return old is None or new >= old
+
+
+def _apply_todo_delta(items, delta: dict) -> None:
+    """Apply an update_plan/wrap_up delta to a todo list in place (indices are 1-based)."""
+    if not isinstance(items, list):
+        return
+    todos = [t for t in items if isinstance(t, dict)]
+
+    def mark(n, status):
+        if isinstance(n, int) and 1 <= n <= len(todos):
+            todos[n - 1]["status"] = status
+
+    for n in delta.get("done") or []:
+        mark(n, "completed")
+    mark(delta.get("start"), "in_progress")
+    if delta.get("advance"):
+        for t in todos:
+            if t.get("status") == "in_progress":
+                t["status"] = "completed"
+                break
+        for t in todos:
+            if t.get("status") == "pending":
+                t["status"] = "in_progress"
+                break
+    if delta.get("complete_all"):
+        for t in todos:
+            t["status"] = "completed"
 
 
 def _digest(text: str) -> str:
@@ -108,7 +151,8 @@ class Graph:
             task = self.add_node("task", _digest(text), text[:_MAX_LABEL], stamp)
             self.add_edge(session_node, "asked", task, stamp)
             self.meta.setdefault("current_task", {})[sid] = task
-            self.meta["last_prompt"] = {"text": text, "ts": ts, "session": sid}
+            if _is_newer(ts, self.meta.get("last_prompt")):
+                self.meta["last_prompt"] = {"text": text, "ts": ts, "session": sid}
         elif kind in ("edit", "read"):
             path = data.get("path")
             if path:
@@ -127,9 +171,18 @@ class Graph:
             src = self.meta.get("tool_nodes", {}).get(data.get("tool_use_id")) or session_node
             self.add_edge(src, "failed", node, stamp)
         elif kind == "todo":
-            items = data.get("items") or []
+            items = [dict(t) for t in data.get("items") or [] if isinstance(t, dict)]
             self.meta.setdefault("todos", {})[sid] = items
-            self.meta["last_todos"] = {"session": sid, "ts": ts, "items": items}
+            if _is_newer(ts, self.meta.get("last_todos")):
+                # A separate copy, so a later delta is applied to each list exactly once.
+                self.meta["last_todos"] = {"session": sid, "ts": ts, "items": [dict(t) for t in items]}
+        elif kind == "todo_delta":
+            _apply_todo_delta(self.meta.get("todos", {}).get(sid), data)
+            last = self.meta.get("last_todos")
+            if isinstance(last, dict) and last.get("session") == sid:
+                _apply_todo_delta(last.get("items"), data)
+                if _is_newer(ts, last):
+                    last["ts"] = ts
         elif kind == "usage":
             if isinstance(data.get("context"), int):
                 sess["context"] = data["context"]

@@ -52,7 +52,9 @@ def build_brief(graph: Graph, budget_chars: int = 12000) -> str:
         return ""
 
     # Section bodies, highest priority first: (heading, item lines).
-    todos = (graph.meta.get("last_todos") or {}).get("items") or []
+    last_todos = graph.meta.get("last_todos") or {}
+    todos = last_todos.get("items") or []
+    todo_stamp = _fmt_ts(last_todos.get("ts"))
     next_steps = [f"- [{_one_line(t.get('status', ''))}] {_one_line(t.get('content', ''))}"
                   for t in todos if t.get("status") != "completed"][:_MAX_TODOS]
     decisions = [f"- {_one_line(n.get('label', ''))}"
@@ -63,7 +65,7 @@ def build_brief(graph: Graph, budget_chars: int = 12000) -> str:
     errors = [f"- {_one_line(n.get('label', ''))}"
               for n in _newest(by_kind("error"), _MAX_ERRORS)]
     sections = [
-        ("## Next steps", next_steps),
+        (f"## Next steps (as of {todo_stamp})" if todo_stamp else "## Next steps", next_steps),
         ("## Decisions", decisions),
         ("## Recently changed files", files),
         ("## Recent errors", errors),

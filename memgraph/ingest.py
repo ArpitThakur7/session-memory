@@ -37,11 +37,7 @@ def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
     """
     offsets = state.setdefault("offsets", {})
     applied = 0
-    try:
-        files = sorted(p for p in Path(transcripts_dir).glob("*.jsonl") if p.is_file())
-    except OSError:
-        return 0
-    for path in files:
+    for path in _oldest_first(transcripts_dir):
         try:
             with open(path, "rb") as fh:
                 size = fh.seek(0, 2)
@@ -62,7 +58,29 @@ def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
             except Exception:
                 continue  # an odd line must not stall this file forever
             for event in events:
-                graph.apply(event)
+                try:
+                    graph.apply(event)
+                except Exception:
+                    continue  # nor may one odd event
                 applied += 1
         offsets[path.name] = offset + end
     return applied
+
+
+def _oldest_first(transcripts_dir: Path) -> list[Path]:
+    """Top-level *.jsonl files ordered by modification time, oldest first (name breaks ties).
+
+    Newer sessions are then applied last, so "latest" values in the graph come
+    from the session the user worked in most recently.
+    """
+    keyed = []
+    try:
+        for p in Path(transcripts_dir).glob("*.jsonl"):
+            try:
+                if p.is_file():
+                    keyed.append((p.stat().st_mtime, p.name, p))
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return [p for _mtime, _name, p in sorted(keyed)]

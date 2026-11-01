@@ -9,6 +9,8 @@ from typing import Iterable
 _MAX_TEXT = 200
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
+_PLAN_TOOL = "mcp__ccd_turn__update_plan"
+_WRAP_UP_TOOL = "mcp__ccd_turn__wrap_up"
 
 
 def parse_ts(value) -> datetime | None:
@@ -24,7 +26,7 @@ def parse_ts(value) -> datetime | None:
 
 @dataclass(frozen=True)
 class Event:
-    kind: str  # prompt | edit | read | command | error | todo | usage
+    kind: str  # prompt | edit | read | command | error | todo | todo_delta | usage
     ts: str
     session: str
     data: dict
@@ -70,9 +72,23 @@ def _tool_use_event(block: dict, ts: str, session: str) -> Event | None:
         return Event("command", ts, session, {"cmd": cmd, "id": block.get("id")})
     if name == "TodoWrite" and isinstance(inp.get("todos"), list):
         return Event("todo", ts, session, {"items": _todo_items(inp["todos"])})
-    if name == "mcp__ccd_turn__update_plan" and isinstance(inp.get("items"), list):
+    if name == _PLAN_TOOL and isinstance(inp.get("items"), list):
         return Event("todo", ts, session, {"items": _todo_items(inp["items"])})
+    if name == _PLAN_TOOL:
+        return Event("todo_delta", ts, session, {
+            "advance": inp.get("advance") is True,
+            "done": [n for n in inp.get("done") or [] if _is_int(n)] if isinstance(inp.get("done"), list) else [],
+            "start": inp.get("start") if _is_int(inp.get("start")) else None,
+            "complete_all": False,
+        })
+    if name == _WRAP_UP_TOOL:  # closes the turn: every step of the plan is done
+        return Event("todo_delta", ts, session,
+                     {"advance": False, "done": [], "start": None, "complete_all": True})
     return None
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _parse_user(msg: dict, obj: dict, ts: str, session: str) -> list[Event]:

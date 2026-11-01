@@ -94,3 +94,57 @@ def test_state_roundtrip_and_bad_files(tmp_path):
     p.write_text(json.dumps([1, 2]), encoding="utf-8")
     assert load_state(p) == {}
     assert not list(p.parent.glob("*.tmp"))
+
+
+
+def _prompt(session, ts, text):
+    return json.dumps({"type": "user", "sessionId": session, "timestamp": ts,
+                       "message": {"role": "user", "content": text}})
+
+
+def test_newer_session_wins_even_when_its_file_sorts_first(tmp_path):    # I1
+    import os
+    d = tmp_path / "proj"; d.mkdir()
+    (d / "a.jsonl").write_text(_prompt("new", "2026-11-01T12:00:00.000Z", "newer request") + "\n", encoding="utf-8")
+    (d / "b.jsonl").write_text(_prompt("old", "2026-11-01T10:00:00.000Z", "older request") + "\n", encoding="utf-8")
+    os.utime(d / "b.jsonl", (1_000_000, 1_000_000)); os.utime(d / "a.jsonl", (2_000_000, 2_000_000))
+    g = Graph()
+    ingest_dir(d, g, {})
+    assert g.meta["last_prompt"]["text"] == "newer request"
+
+
+def test_files_are_ingested_oldest_mtime_first(tmp_path, monkeypatch):     # I1
+    import os
+    d = tmp_path / "proj"; d.mkdir()
+    for name in ("a.jsonl", "b.jsonl", "c.jsonl"):
+        (d / name).write_text(_prompt(name, "2026-11-01T12:00:00.000Z", name) + "\n", encoding="utf-8")
+    os.utime(d / "a.jsonl", (3_000_000, 3_000_000))
+    os.utime(d / "b.jsonl", (1_000_000, 1_000_000))
+    os.utime(d / "c.jsonl", (1_000_000, 1_000_000))   # same mtime as b: name breaks the tie
+    seen = []
+    real = ingest_mod.parse_line
+
+    def spy(line):
+        seen.append(json.loads(line)["sessionId"])
+        return real(line)
+
+    monkeypatch.setattr(ingest_mod, "parse_line", spy)
+    ingest_dir(d, Graph(), {})
+    assert seen == ["b.jsonl", "c.jsonl", "a.jsonl"]
+
+
+def test_event_that_fails_to_apply_is_skipped(tmp_path, monkeypatch):    # M3
+    d = tmp_path / "proj"; d.mkdir()
+    bad = PROMPT_LINE.replace("Add logout", "BOOM")
+    (d / "a.jsonl").write_bytes("\n".join([PROMPT_LINE, bad, PROMPT_LINE]).encode("utf-8") + b"\n")
+    real = Graph.apply
+
+    def flaky(self, event):
+        if event.data.get("text") == "BOOM":
+            raise KeyError("odd event")
+        return real(self, event)
+
+    monkeypatch.setattr(Graph, "apply", flaky)
+    s = {}
+    assert ingest_dir(d, Graph(), s) == 2
+    assert s["offsets"]["a.jsonl"] == (d / "a.jsonl").stat().st_size
