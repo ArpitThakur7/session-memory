@@ -1,0 +1,8 @@
+{"type":"user","sessionId":"s1","timestamp":"2026-11-01T10:00:00.000Z","message":{"role":"user","content":"Add login page to the app"}}
+{"type":"assistant","sessionId":"s1","timestamp":"2026-11-01T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"src/login.py","old_string":"a","new_string":"b"}}],"usage":{"input_tokens":10,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000,"output_tokens":50}}}
+{"type":"assistant","sessionId":"s1","timestamp":"2026-11-01T10:00:09.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"pytest tests/test_login.py"}}]}}
+{"type":"user","sessionId":"s1","timestamp":"2026-11-01T10:00:20.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"FAILED test_login - AssertionError"}]}}
+{"type":"assistant","sessionId":"s1","timestamp":"2026-11-01T10:00:30.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"TodoWrite","input":{"todos":[{"content":"Fix login test","status":"in_progress"},{"content":"Add logout","status":"pending"},{"content":"Create login form","status":"completed"}]}}]}}
+{"type":"attachment","sessionId":"s1","timestamp":"2026-11-01T10:00:31.000Z"}
+{"type":"user","sessionId":"s1","timestamp":"2026-11-01T10:01:00.000Z","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"user","sessionId":"s1","timestamp":"2026-11-01T10:02:00.000Z","message":{"role":"user","con

@@ -1,0 +1,2 @@
+*.jsonl -text
+bin/run-python text eol=lf
