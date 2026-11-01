@@ -9,9 +9,18 @@ from memgraph.transcript import parse_line
 
 
 def memory_dir(cwd: Path) -> Path:
-    """The per-project memory directory, created if missing."""
+    """The per-project memory directory, created if missing.
+
+    It holds a `.gitignore` of `*` so graph.json (commands, prompts, errors)
+    is never committed by accident; an existing .gitignore is left alone.
+    """
     d = Path(cwd) / ".claude" / "session-memory"
     d.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(d / ".gitignore", "x", encoding="utf-8", newline="\n") as fh:
+            fh.write("*\n")
+    except OSError:  # already there (FileExistsError) or not writable: memory still works
+        pass
     return d
 
 

@@ -148,3 +148,12 @@ def test_event_that_fails_to_apply_is_skipped(tmp_path, monkeypatch):    # M3
     s = {}
     assert ingest_dir(d, Graph(), s) == 2
     assert s["offsets"]["a.jsonl"] == (d / "a.jsonl").stat().st_size
+
+
+
+def test_memory_dir_ignores_itself_in_git(tmp_path):                  # I6
+    d = memory_dir(tmp_path)
+    assert (d / ".gitignore").read_text(encoding="utf-8") == "*\n"
+    (d / ".gitignore").write_text("graph.json\n", encoding="utf-8")   # the user's own rules are kept
+    memory_dir(tmp_path)
+    assert (d / ".gitignore").read_text(encoding="utf-8") == "graph.json\n"

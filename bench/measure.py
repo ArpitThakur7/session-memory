@@ -52,7 +52,7 @@ def measure(transcripts_dir: Path) -> list[dict]:
             graph, history = _read_transcript(path)
         except OSError:
             continue
-        if not history:
+        if history is None:  # no usage recorded at all; a recorded 0 is still a row
             continue
         brief = len(build_brief(graph)) // 4
         rows.append({
