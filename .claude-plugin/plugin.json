@@ -1,0 +1,6 @@
+{
+  "name": "session-memory",
+  "version": "0.1.0",
+  "description": "Zero-token project memory graph, cache guard and short startup brief for Claude Code",
+  "license": "MIT"
+}

@@ -1,0 +1,5 @@
+{"hooks": {
+  "SessionStart": [{"matcher": "startup|clear", "hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-session-start"}]}],
+  "UserPromptSubmit": [{"hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-prompt"}]}],
+  "Stop": [{"hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-stop"}]}]
+}}
