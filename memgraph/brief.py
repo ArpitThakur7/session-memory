@@ -44,7 +44,7 @@ def _request_line(last_prompt: dict, text: str) -> str:
     return f"Last request ({stamp}): {text}" if stamp else f"Last request: {text}"
 
 
-def _display_path(label: str, project_root: Path | None) -> str | None:
+def display_path(label: str, project_root: Path | None) -> str | None:
     """How a file is shown: relative to `project_root` when inside it, None (hidden)
     when it is absolute and outside it. Relative paths, and every path when there
     is no root, are shown as recorded."""
@@ -64,7 +64,7 @@ def _changed_files(graph: Graph, files: list[dict], project_root: Path | None) -
     edited = {e.get("dst") for e in graph.edges.values() if e.get("rel") == "edited"}
     shown: list[str] = []
     for node in _newest([n for n in files if n.get("id") in edited]):
-        path = _display_path(str(node.get("label", "")), project_root)
+        path = display_path(str(node.get("label", "")), project_root)
         if path is not None and path not in shown:
             shown.append(path)
             if len(shown) == _MAX_FILES:
