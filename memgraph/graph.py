@@ -5,12 +5,15 @@ import hashlib
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from memgraph.transcript import Event, parse_ts
 
 _MAX_TOOL_NODES = 500
 _MAX_LABEL = 200
+_MAX_RECENT_PROMPTS = 5
+_NO_TIME = datetime.min.replace(tzinfo=timezone.utc)  # sorts entries with no usable time last
 
 
 def _is_newer(ts, stored) -> bool:
@@ -151,8 +154,20 @@ class Graph:
             task = self.add_node("task", _digest(text), text[:_MAX_LABEL], stamp)
             self.add_edge(session_node, "asked", task, stamp)
             self.meta.setdefault("current_task", {})[sid] = task
+            entry = {"text": text, "ts": ts, "session": sid}
             if _is_newer(ts, self.meta.get("last_prompt")):
-                self.meta["last_prompt"] = {"text": text, "ts": ts, "session": sid}
+                self.meta["last_prompt"] = dict(entry)
+            self._remember_prompt(entry)
+        elif kind == "reply":
+            text = str(data.get("text") or "")
+            if text and _is_newer(ts, self.meta.get("last_reply")):
+                self.meta["last_reply"] = {"text": text, "ts": ts, "session": sid}
+        elif kind == "title":
+            text = str(data.get("text") or "")
+            # A title the user set (/rename) wins over Claude Code's generated one.
+            if text and (data.get("source") == "custom" or sess.get("title_source") != "custom"):
+                sess["title"] = text
+                sess["title_source"] = data.get("source")
         elif kind in ("edit", "read"):
             path = data.get("path")
             if path:
@@ -186,6 +201,13 @@ class Graph:
         elif kind == "usage":
             if isinstance(data.get("context"), int):
                 sess["context"] = data["context"]
+
+    def _remember_prompt(self, entry: dict) -> None:
+        """Keep meta["recent_prompts"]: the newest prompts overall by time, no exact repeats."""
+        recent = [r for r in self.meta.get("recent_prompts") or [] if isinstance(r, dict) and r != entry]
+        recent.append(entry)
+        recent.sort(key=lambda r: parse_ts(r.get("ts")) or _NO_TIME, reverse=True)
+        self.meta["recent_prompts"] = recent[:_MAX_RECENT_PROMPTS]
 
     def _remember_tool(self, tool_id, node_id: str) -> None:
         if not tool_id:

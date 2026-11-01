@@ -51,7 +51,7 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         graph, state = _ingest(payload, mem)
         graph.save(mem / "graph.json")
         save_state(mem / "state.json", state)
-        brief = build_brief(graph)
+        brief = build_brief(graph, project_root=Path(payload["cwd"]))
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
     else:  # hook-prompt
@@ -116,7 +116,7 @@ def _stats(stdout: TextIO) -> int:
     sessions = graph.meta.get("sessions", {})
     stdout.write(
         f"nodes={len(graph.nodes)} edges={len(graph.edges)} "
-        f"sessions={len(sessions)} brief_chars={len(build_brief(graph))}\n"
+        f"sessions={len(sessions)} brief_chars={len(build_brief(graph, project_root=Path.cwd()))}\n"
     )
     return 0
 

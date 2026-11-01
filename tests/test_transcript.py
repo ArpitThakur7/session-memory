@@ -90,3 +90,58 @@ def test_update_plan_without_items_gives_todo_delta():                 # I2
 def test_wrap_up_completes_every_step():                               # I2
     line = _tool_line("mcp__ccd_turn__wrap_up", {"recap": "Done.", "ask": "Ship?"})
     assert _deltas(line) == [{"advance": False, "done": [], "start": None, "complete_all": True}]
+
+
+
+def _user(content, **extra):
+    obj = {"type": "user", "sessionId": "s", "timestamp": "2026-11-01T12:00:00.000Z",
+           "message": {"role": "user", "content": content}}
+    obj.update(extra)
+    return json.dumps(obj)
+
+
+def test_interruptions_and_compact_summaries_are_not_prompts():       # I3
+    assert parse_line(_user("[Request interrupted by user]")) == []
+    assert parse_line(_user([{"type": "text", "text": "[Request interrupted by user for tool use]"}])) == []
+    assert parse_line(_user("This session is being continued from a previous one...", isCompactSummary=True)) == []
+    assert [e.kind for e in parse_line(_user("real request"))] == ["prompt"]
+
+
+def test_tool_rejections_are_not_errors():                             # I3
+    def result(text):
+        return _user([{"type": "tool_result", "tool_use_id": "t", "is_error": True, "content": text}])
+
+    assert parse_line(result("The user doesn't want to proceed with this tool use. The tool use was rejected")) == []
+    assert parse_line(result("Rejected. STOP what you are doing and wait for the user")) == []
+    assert [e.kind for e in parse_line(result("FAILED test_x"))] == ["error"]
+
+
+def test_session_titles():                                             # I3
+    custom = parse_line(json.dumps({"type": "custom-title", "customTitle": "Login work", "sessionId": "s"}))
+    ai = parse_line(json.dumps({"type": "ai-title", "aiTitle": "Fix the login", "sessionId": "s"}))
+    assert [(e.kind, e.session, e.data) for e in custom] == [("title", "s", {"text": "Login work", "source": "custom"})]
+    assert [(e.kind, e.session, e.data) for e in ai] == [("title", "s", {"text": "Fix the login", "source": "ai"})]
+    assert parse_line(json.dumps({"type": "ai-title", "aiTitle": "  ", "sessionId": "s"})) == []
+
+
+def _replies(line):
+    return [e.data["text"] for e in parse_line(line) if e.kind == "reply"]
+
+
+def test_reply_is_last_text_block_of_a_real_assistant_line():         # I3
+    obj = {"type": "assistant", "sessionId": "s", "timestamp": "2026-11-01T12:00:00.000Z",
+           "message": {"model": "claude-opus", "content": [
+               {"type": "text", "text": "first"}, {"type": "tool_use", "id": "x", "name": "Grep", "input": {}},
+               {"type": "text", "text": "Tests pass; next is the logout page."}]}}
+    assert _replies(json.dumps(obj)) == ["Tests pass; next is the logout page."]
+    obj["message"]["content"] = [{"type": "text", "text": "R" * 900}]
+    assert _replies(json.dumps(obj)) == ["R" * 600]
+    obj["message"]["content"] = [{"type": "text", "text": "  \n"}]
+    assert _replies(json.dumps(obj)) == []
+    assert _replies(_assistant_line(model="<synthetic>", text="No response requested.")) == []
+
+
+def test_wrap_up_recap_and_ask_are_a_reply():                         # I3
+    line = _tool_line("mcp__ccd_turn__wrap_up", {"recap": "Login works.", "ask": "Commit it?"})
+    assert _replies(line) == ["Login works. Commit it?"]
+    assert _replies(_tool_line("mcp__ccd_turn__wrap_up", {"recap": "Only recap."})) == ["Only recap."]

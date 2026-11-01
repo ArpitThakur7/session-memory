@@ -136,3 +136,21 @@ def test_prompt_hook_keeps_guard_state_in_guard_json_only(tmp_path):   # M2
     assert json.loads(out)["decision"] == "block"
     assert json.loads((mem / "state.json").read_text(encoding="utf-8")) == stale
     assert "guard" in json.loads((mem / "guard.json").read_text(encoding="utf-8"))
+
+
+
+def test_session_start_brief_lists_files_relative_to_cwd(tmp_path):   # I3
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    lines = [{"type": "user", "sessionId": "s3", "timestamp": "2026-11-01T12:00:00.000Z",
+              "message": {"role": "user", "content": "edit things"}}]
+    for i, path in enumerate([cwd / "src" / "app.py", tmp_path / "other" / "x.py"]):
+        lines.append({"type": "assistant", "sessionId": "s3", "timestamp": f"2026-11-01T12:00:0{i + 1}.000Z",
+                      "message": {"content": [{"type": "tool_use", "id": f"e{i}", "name": "Edit",
+                                               "input": {"file_path": str(path)}}]}})
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir()
+    (tdir / "t.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    stdin = json.dumps({"session_id": "s3", "transcript_path": str(tdir / "t.jsonl"), "cwd": str(cwd)})
+    ctx = json.loads(run(["hook-session-start"], stdin))["hookSpecificOutput"]["additionalContext"]
+    assert "- src/app.py" in ctx and "x.py" not in ctx

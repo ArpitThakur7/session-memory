@@ -203,3 +203,33 @@ def test_todo_delta_of_other_session_leaves_last_todos_alone():      # I2
     assert _statuses(g.meta["todos"]["a"]) == ["completed", "in_progress"]
     assert g.meta["last_todos"]["session"] == "b" and _statuses(g.meta["last_todos"]["items"]) == ["in_progress"]
     g.apply(Event("todo_delta", "2026-11-01T11:06:00Z", "nobody", _delta(advance=True)))  # no todos: no crash
+
+
+
+def test_session_title_custom_beats_ai():                             # I3
+    g = Graph()
+    g.apply(Event("title", None, "s", {"text": "AI one", "source": "ai"}))
+    assert g.meta["sessions"]["s"]["title"] == "AI one"
+    g.apply(Event("title", None, "s", {"text": "Mine", "source": "custom"}))
+    g.apply(Event("title", None, "s", {"text": "AI two", "source": "ai"}))
+    assert g.meta["sessions"]["s"]["title"] == "Mine"
+    g.apply(Event("title", None, "s", {"text": "Mine v2", "source": "custom"}))
+    assert g.meta["sessions"]["s"]["title"] == "Mine v2"
+
+
+def test_recent_prompts_newest_five_by_time():                         # I3
+    g = Graph()
+    for i in (3, 1, 6, 0, 5, 2, 4):
+        g.apply(Event("prompt", f"2026-11-01T1{i}:00:00Z", f"s{i % 2}", {"text": f"p{i}"}))
+    g.apply(Event("prompt", "2026-11-01T16:00:00Z", "s0", {"text": "p6"}))  # same prompt again: no duplicate
+    recent = g.meta["recent_prompts"]
+    assert [r["text"] for r in recent] == ["p6", "p5", "p4", "p3", "p2"]
+    assert recent[0] == {"text": "p6", "ts": "2026-11-01T16:00:00Z", "session": "s0"}
+
+
+def test_last_reply_kept_only_when_newer():                           # I3
+    g = Graph()
+    g.apply(Event("reply", "2026-11-01T12:00:00Z", "a", {"text": "newer"}))
+    g.apply(Event("reply", "2026-11-01T11:00:00Z", "b", {"text": "older"}))
+    g.apply(Event("reply", None, "b", {"text": "no time"}))
+    assert g.meta["last_reply"] == {"text": "newer", "ts": "2026-11-01T12:00:00Z", "session": "a"}
