@@ -1,3 +1,5 @@
+import json
+
 import memgraph.guard as guard_mod
 from datetime import datetime, timedelta, timezone
 
@@ -113,14 +115,55 @@ def test_last_activity_skips_a_line_that_raises(tmp_path, monkeypatch):    # R5
     assert ts == datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc) and ctx == 7
 
 
-def test_last_activity_reads_only_tail_and_drops_partial_line(tmp_path):
+def _assistant(ts, tokens):
+    return (
+        '{"type":"assistant","timestamp":"%s","message":{"usage":{"input_tokens":%d}}}'
+        % (ts, tokens)
+    )
+
+
+def test_last_activity_reads_only_the_last_256kb(tmp_path):
     f = tmp_path / "big.jsonl"
-    old = '{"type":"assistant","timestamp":"2026-11-01T09:00:00.000Z","message":{"usage":{"input_tokens":5}}}\n'
+    head = _assistant("2026-11-01T11:00:00.000Z", 99)        # newer, but > 256 KB before the end
     pad = '{"type":"system","content":"' + "x" * 1000 + '"}\n'
-    new = '{"type":"assistant","timestamp":"2026-11-01T10:00:00.000Z","message":{"usage":{"input_tokens":8}}}\n'
-    f.write_text(old + pad * 400 + new, encoding="utf-8")        # > 256 KB; old line is outside the tail
+    tail = _assistant("2026-11-01T10:00:00.000Z", 8)
+    f.write_text(head + "\n" + pad * 400 + tail + "\n", encoding="utf-8")
+    assert f.stat().st_size > 256 * 1024
     ts, ctx = last_activity(f)
     assert ts == datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc) and ctx == 8
+
+
+def test_last_activity_drops_the_partial_first_line_of_the_tail(tmp_path):
+    f = tmp_path / "cut.jsonl"
+    newer = _assistant("2026-11-01T11:00:00.000Z", 99)
+    older = _assistant("2026-11-01T10:00:00.000Z", 8)
+    json.loads(newer)                                         # the fragment below is a valid line on its own
+    junk = "x" * 5000
+    # Size the pad so the 256 KB cut lands exactly on the '{' of `newer`, which sits mid-line after `junk`.
+    pad_len = 256 * 1024 - len(newer) - len(older) - 3
+    shell = '{"type":"system","content":""}'
+    pad = '{"type":"system","content":"' + "y" * (pad_len - len(shell)) + '"}'
+    data = junk + newer + "\n" + pad + "\n" + older + "\n"
+    f.write_bytes(data.encode("utf-8"))
+    assert len(data) - 256 * 1024 == len(junk)
+    ts, ctx = last_activity(f)
+    assert ts == datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc) and ctx == 8
+
+
+def test_last_activity_survives_unicode_line_separators_in_content(tmp_path):
+    f = tmp_path / "u2028.jsonl"
+    newest = json.dumps(
+        {
+            "type": "assistant",
+            "timestamp": "2026-11-01T11:00:00.000Z",
+            "message": {"content": [{"type": "text", "text": "a b\x85c\x0cd"}], "usage": {"input_tokens": 77}},
+        },
+        ensure_ascii=False,
+    )
+    older = _assistant("2026-11-01T10:00:00.000Z", 8)
+    f.write_bytes((newest + "\n" + older + "\n").encode("utf-8"))
+    ts, ctx = last_activity(f)
+    assert ts == datetime(2026, 11, 1, 11, 0, tzinfo=timezone.utc) and ctx == 8
 
 
 def test_env_overrides(monkeypatch):

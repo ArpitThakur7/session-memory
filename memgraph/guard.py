@@ -60,7 +60,7 @@ def _tail_lines(path: Path) -> list[str]:
         start = max(0, size - _TAIL_BYTES)
         f.seek(start)
         data = f.read()
-    lines = data.decode("utf-8", errors="replace").splitlines()
+    lines = data.decode("utf-8", errors="replace").split("\n")  # not splitlines(): that also splits on U+2028 etc. inside JSON strings
     if start > 0 and lines:
         lines = lines[1:]  # first line of the chunk is probably cut off
     return lines
@@ -79,13 +79,16 @@ def last_activity(transcript_path: Path) -> tuple[datetime | None, int | None]:
             events = parse_line(line)
             obj = json.loads(line)
             ts = _parse_ts(obj.get("timestamp")) if obj.get("type") == "assistant" else None
+            line_context = None
+            for ev in events:
+                if ev.kind == "usage" and isinstance(ev.data.get("context"), int):
+                    line_context = ev.data["context"]
         except Exception:
             continue
         if ts is not None and (newest is None or ts > newest):
             newest = ts
-        for ev in events:
-            if ev.kind == "usage" and isinstance(ev.data.get("context"), int):
-                context = ev.data["context"]
+        if line_context is not None:
+            context = line_context
     return newest, context
 
 
