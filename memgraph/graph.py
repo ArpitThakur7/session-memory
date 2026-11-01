@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from memgraph.transcript import Event
@@ -14,6 +15,23 @@ _MAX_LABEL = 200
 
 def _digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def write_json_atomic(path: Path, obj) -> None:
+    """Write `obj` as JSON to `path` atomically: unique temp file beside it, then os.replace."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class Graph:
@@ -40,20 +58,8 @@ class Graph:
         return g
 
     def save(self, path: Path) -> None:
-        """Atomically write the graph: temp file next to `path`, then os.replace."""
-        path = Path(path)
-        tmp = path.with_suffix(".tmp")
-        payload = {"nodes": self.nodes, "edges": self.edges, "meta": self.meta}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-            raise
+        """Atomically write the graph to `path`."""
+        write_json_atomic(path, {"nodes": self.nodes, "edges": self.edges, "meta": self.meta})
 
     # ---- mutation ----------------------------------------------------
 

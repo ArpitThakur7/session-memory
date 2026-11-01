@@ -119,3 +119,15 @@ def test_none_ts_and_session_do_not_crash():
     g.apply(Event("prompt", None, None, {"text": "x"}))
     g.apply(Event("usage", None, None, {"context": 5}))
     assert g.meta["sessions"]["unknown"]["context"] == 5
+
+
+def test_write_json_atomic_cleans_up_on_failure(tmp_path):
+    import json
+    import pytest
+    from memgraph.graph import write_json_atomic
+    p = tmp_path / "sub" / "out.json"
+    with pytest.raises(TypeError):
+        write_json_atomic(p, {"bad": object()})
+    assert not p.exists() and not list(p.parent.glob("*.tmp"))
+    write_json_atomic(p, {"ok": 1})
+    assert json.loads(p.read_text(encoding="utf-8")) == {"ok": 1}

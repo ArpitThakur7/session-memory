@@ -13,3 +13,18 @@ def graph_from_fixture():
     for ev in parse_lines(LINES):
         g.apply(ev)
     return g
+
+PROMPT_LINE: str = (
+    '{"type":"user","sessionId":"s1","timestamp":"2026-11-01T11:00:00.000Z",'
+    '"message":{"role":"user","content":"Add logout"}}'
+)
+
+
+def copy_fixture(tmp_path: Path) -> Path:
+    """Copy the fixture byte-for-byte into tmp_path/'proj' and return that directory."""
+    import shutil
+
+    d = tmp_path / "proj"
+    d.mkdir()
+    shutil.copyfile(FIXTURE, d / FIXTURE.name)
+    return d
