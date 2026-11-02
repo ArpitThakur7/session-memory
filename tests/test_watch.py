@@ -468,3 +468,52 @@ def test_long_turn_moves_deadline_instead_of_warning(tmp_path, monkeypatch):   #
     warn = (dl2 - timedelta(minutes=7)).timestamp()
     assert warn <= at[0] < warn + 31
     assert data["notified_for"] == data["deadline"]
+
+
+def test_spawn_env_and_cwd_can_import_cli_from_a_foreign_cwd(monkeypatch, tmp_path):   # M11
+    calls = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            calls.append((cmd, kw))
+
+    monkeypatch.chdir(tmp_path)  # the hook runs in the user's project, not in this repo
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(watch.subprocess, "Popen", FakePopen)
+    watch._spawn_process(tmp_path)
+    monkeypatch.setattr(watch.subprocess, "Popen", real_popen)
+    _cmd, kw = calls[0]
+    for cwd in (kw["cwd"], str(tmp_path)):  # also proves PYTHONPATH alone is enough
+        r = subprocess.run([sys.executable, "-c", "import memgraph.cli"], env=kw["env"], cwd=cwd,
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+
+
+def test_stop_arms_watcher_then_session_start_points_at_fresh_packs(tmp_path, monkeypatch):   # M11
+    import io as _io
+
+    from memgraph.cli import main
+    from tests.test_cli import hook_input
+
+    monkeypatch.delenv("SESSION_MEMORY_CACHE_TTL_MIN", raising=False)
+    spawn = FakeSpawn()
+    monkeypatch.setattr(watch, "_spawn", spawn)
+    payload = hook_input(tmp_path)
+    project, mem = tmp_path / "proj", tmp_path / "proj/.claude/session-memory"
+    stop_at = datetime(2026, 11, 1, 10, 1, 0, tzinfo=timezone.utc)  # fixture's last reply is 10:00:30
+    assert main(["hook-stop"], _io.StringIO(payload), _io.StringIO(), now=stop_at) == 0
+    assert spawn.calls == [project]
+
+    ft, nt = FakeTime(stop_at), FakeNotify()
+    assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep, notify=nt) == "notified"
+    assert len(nt.calls) == 1 and (mem / "resume-pack.md").exists()
+
+    out = _io.StringIO()
+    assert main(["hook-session-start"], _io.StringIO(payload), out) == 0
+    brief = json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+    assert "Full resume pack: .claude/session-memory/resume-pack.md" in brief
+    assert "Add login page" in (mem / "resume-pack.md").read_text(encoding="utf-8")
+    if (mem / "memory.png").exists():  # Pillow installed: the picture is as new as the pack
+        assert "Visual summary: open .claude/session-memory/memory.png" in brief
+    assert not (mem / "error.log").exists()

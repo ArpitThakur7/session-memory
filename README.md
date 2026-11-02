@@ -61,7 +61,9 @@ macOS, Linux or Git Bash:
 - `--size tiny` is about 2,000 characters. `standard` (the default) is about 8,000. `deep` is about 24,000.
 - It writes `.claude/session-memory/resume-pack.md`.
 - It also draws `.claude/session-memory/memory.png`, a 1092 x 1092 picture of the same story (about 1,590 image tokens). This needs the Pillow package (`pip install pillow`). Without Pillow the picture is skipped and the text pack still works. Add `--no-visual` to skip the picture.
-- When these files exist, the brief adds one line for each, so Claude knows where to look.
+- The pack's third line says when it was built ("Built YYYY-MM-DD HH:MM", your local time). The picture shows the same line at the top.
+- Each new session (including after `/clear`) rebuilds `resume-pack.md` from the latest memory before the brief is made, so the pack the brief points at is never older than the brief. With nothing to pack yet, no pack file is written.
+- When these files exist, the brief adds one line for each, so Claude knows where to look. The picture line is added only when `memory.png` is at least as new as `resume-pack.md`; an older picture shows an older state, so the brief leaves it out. Run `pack` again (or let the cache watcher do it) to refresh the picture.
 
 To compare the sizes on your own transcripts, use the full path to the plugin. You can run this from any folder:
 
@@ -78,6 +80,7 @@ After each reply, a small background process watches the clock. Claude Code's pr
 
 - The warning comes 10 minutes before the cache ends. If the cache time is short, it comes at half of that time.
 - If your computer was asleep and the time has passed, the notification says the cache "has expired".
+- Before it warns, it reads the transcript again. During a long turn Claude keeps replying without finishing, so the cache stays warm; the watcher then moves the deadline and keeps waiting instead of warning.
 - Set `SESSION_MEMORY_CACHE_TTL_MIN` to change the cache time in minutes. The default is 60.
 - It is silent when it works. Errors go to `.claude/session-memory/error.log`.
 - Limit: there is one deadline for each project. If you have two chats open in the same project, the newest reply sets the deadline for both.
@@ -114,6 +117,14 @@ claude mcp add session-memory -- "<repo>/bin/run-python" mcp --project "<your pr
 Windows:
 
 ```json
+{"servers": {"session-memory": {"type": "stdio", "command": "py", "args": ["-3", "-m", "memgraph.cli", "mcp", "--project", "${workspaceFolder}"], "env": {"PYTHONPATH": "<repo>"}}}}
+```
+
+This is the recommended Windows form: it starts Python directly through the `py` launcher, because VS Code (an Electron app) may refuse to start a `.cmd` file. Write `<repo>` with forward slashes (`C:/Users/you/Desktop/session-memory`). If `py` is not installed, put the full path to `python.exe` in `command` (for example `C:/Program Files/Python313/python.exe`) and drop `"-3"` from `args`.
+
+Alternative, through the launcher script:
+
+```json
 {"servers": {"session-memory": {"type": "stdio", "command": "<repo>/bin/run-python.cmd", "args": ["mcp", "--project", "${workspaceFolder}"]}}}
 ```
 
@@ -128,10 +139,10 @@ In JSON, write a Windows path with forward slashes (`C:/Users/you/Desktop/sessio
 **Antigravity.** Open `~/.gemini/antigravity/mcp_config.json`. On Windows this is `C:\Users\you\.gemini\antigravity\mcp_config.json`. Do not replace the file: it already has other servers. Add this entry inside `mcpServers`:
 
 ```json
-"session-memory": {"command": "python", "args": ["-m", "memgraph.cli", "mcp", "--project", "<your project>"], "env": {"PYTHONPATH": "<repo>"}}
+"session-memory": {"command": "py", "args": ["-3", "-m", "memgraph.cli", "mcp", "--project", "<your project>"], "env": {"PYTHONPATH": "<repo>"}}
 ```
 
-Antigravity on Windows may not run bash scripts, so this entry calls Python directly. In JSON files, write a Windows path with double backslashes (`C:\Users\you\Desktop\session-memory`) or with forward slashes (`C:/Users/you/Desktop/session-memory`).
+Antigravity on Windows may not run bash scripts, so this entry calls Python directly through the `py` launcher. If `py` is not installed, put the full path to `python.exe` in `command` (for example `C:/Program Files/Python313/python.exe`) and drop `"-3"` from `args`. On macOS or Linux use `"command": "python3"` and drop `"-3"`. In JSON files, write a Windows path with double backslashes (`C:\Users\you\Desktop\session-memory`) or with forward slashes (`C:/Users/you/Desktop/session-memory`).
 
 ## Configuration
 
@@ -152,8 +163,11 @@ Everything is under `<project>/.claude/session-memory/`:
 
 - `graph.json` - the memory graph
 - `state.json` - how far each transcript has been read
+- `graph.lock` - held for a moment while something writes `graph.json`, so two writers never overwrite each other (a lock older than 30 seconds is ignored)
 - `guard.json` - the cache guard's "already warned about this message" note
-- `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command)
+- `watch.json` - the cache watcher's deadline, warning time and which deadline was already announced
+- `watch.lock` - the running cache watcher's process id, so only one watcher runs per project
+- `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command, the cache watcher, and, for `resume-pack.md`, each new session)
 - `error.log` - any internal errors (the plugin never blocks your work if it fails)
 - `.gitignore` - contains `*`, so none of the above is committed
 
@@ -186,6 +200,10 @@ The live test needs an interactive Claude Code session and spends usage limit, s
 - [ ] After one reply, `.claude/session-memory/graph.json` exists.
 - [ ] After `/clear`, the new session's first answer knows the last request and the next steps.
 - [ ] With `SESSION_MEMORY_IDLE_MIN=0` and `SESSION_MEMORY_MIN_TOKENS=1000` set, sending a message is blocked by the guard; sending the same message again goes through.
+- [ ] With `SESSION_MEMORY_CACHE_TTL_MIN=4` set, a desktop notification appears about 2 minutes after a reply.
+- [ ] After `/clear`, the brief contains the "Full resume pack" line (and the "Visual summary" line when the picture is current), and `resume-pack.md` shows the latest request and a fresh "Built" time.
+- [ ] After a reply, close Claude Code: the cache watcher still shows its notification.
+- [ ] In VS Code and in Antigravity, the session-memory server lists 4 tools: `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack`.
 
 **Continuity check.** Do 10 `/clear` resumes during real work. Record whether the first answer named the current task and the next step correctly. Target: at least 9 of 10.
 
