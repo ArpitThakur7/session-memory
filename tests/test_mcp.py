@@ -225,3 +225,14 @@ def test_remember_reports_busy_graph(tmp_path, monkeypatch):   # I3
     (r,) = drive(proj, call(1, "memory_remember", text="note"))
     assert r["result"]["isError"] is True and "busy" in r["result"]["content"][0]["text"].lower()
     assert not Graph.load(memory_dir(proj) / "graph.json").search("note", 5)
+
+
+def test_brief_tool_footer_names_the_recall_tool(tmp_path):   # M7
+    (r,) = drive(seed(tmp_path), call(1, "memory_brief"))
+    text = r["result"]["content"][0]["text"]
+    assert "For older details use the memory_recall tool." in text and "/recall" not in text
+
+
+def test_pack_tool_has_built_line(tmp_path):   # I1
+    (r,) = drive(seed(tmp_path), call(1, "memory_pack", size="tiny"))
+    assert r["result"]["content"][0]["text"].splitlines()[2].startswith("Built 20")

@@ -227,6 +227,29 @@ def _pending(mem_dir: Path) -> tuple[str, datetime, int] | None:
     return text, _utc(dl), lead
 
 
+def _extend_for_activity(mem_dir: Path, deadline_text: str, dl: datetime) -> bool:
+    """Before warning, look at the transcript again: a long turn writes replies without a
+    Stop hook, so the cache may still be warm. If the newest activity gives a later deadline,
+    store it in watch.json (other fields, warn_min included, kept) and return True."""
+    try:
+        data = load_state(mem_dir / WATCH_FILE)
+        transcript = data.get("transcript")
+        if data.get("deadline") != deadline_text or not isinstance(transcript, str) or not transcript:
+            return False
+        last, _context = last_activity(Path(transcript))
+        if last is None:
+            return False
+        newer = deadline(_utc(last), ttl_minutes())
+        if newer <= dl:
+            return False
+        data["deadline"] = newer.isoformat()
+        write_json_atomic(mem_dir / WATCH_FILE, data)
+        return True
+    except Exception:
+        _log(mem_dir)
+        return False
+
+
 def _log(mem_dir: Path) -> None:
     try:
         with open(mem_dir / "error.log", "a", encoding="utf-8") as fh:
@@ -273,7 +296,7 @@ def run_watcher(mem_dir: Path, project: Path, clock=time.time, sleep=time.sleep,
                 idle_since = now
                 text, dl, lead = pending
                 due = dl.timestamp()
-                if now >= due - lead * 60:
+                if now >= due - lead * 60 and not _extend_for_activity(mem_dir, text, dl):
                     outcome = "expired" if now >= due else "notified"
                     _build_packs(mem_dir, project)
                     _mark_notified(mem_dir, text)  # before notifying: a crash must not cause a repeat

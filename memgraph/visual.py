@@ -11,12 +11,12 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from datetime import datetime
 from itertools import islice
 from pathlib import Path
 
-from memgraph.brief import _newest, _one_line
+from memgraph.brief import DATA_NOTE, _newest, _one_line
 from memgraph.graph import Graph
+from memgraph.pack import built_line
 
 IMAGE_SIZE = (1092, 1092)
 IMAGE_FILE = "memory.png"
@@ -214,8 +214,7 @@ def render_visual_pack(graph: Graph, path: Path, project_root: Path | None = Non
     d.rectangle([0, 0, w, _BAR - 8], fill=(235, 240, 248))
     name = project_root.name if project_root is not None and project_root.name else "project"
     d.text((_MARGIN, 5), f"{scrub(name)} \u2014 session memory", font=bold, fill=_HEAD)
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    d.text((_MARGIN, 5 + _LINE), f"generated {stamp}   \u2248 1,590 image tokens", font=body, fill=_MUTED)
+    d.text((_MARGIN, 5 + _LINE), f"{built_line()}   \u2248 1,590 image tokens   {DATA_NOTE}", font=body, fill=_MUTED)
     colors = {"ink": _INK, "head": _HEAD, "muted": _MUTED, "red": _RED}
     for n, (indent, segs) in enumerate(page["flow"]):
         col, row = divmod(n, cap)

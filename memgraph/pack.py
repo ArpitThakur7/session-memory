@@ -12,6 +12,7 @@ from memgraph.graph import Graph
 
 SIZES = {"tiny": 2000, "standard": 8000, "deep": 24000}
 PACK_FILE = "resume-pack.md"
+BUILT_PREFIX = "Built "
 
 # (todos, decisions, files, errors) shown per size before trimming to the cap.
 _LIMITS = {"tiny": (5, 5, 8, 3), "standard": (10, 10, 15, 5), "deep": (20, 20, 40, 10)}
@@ -60,8 +61,19 @@ def _timeline(graph: Graph, with_commands: bool) -> list[str]:
     return lines
 
 
-def build_pack(graph: Graph, size: str = "standard", project_root: Path | None = None) -> str:
-    """Markdown resume pack of at most SIZES[size] characters; "" for an empty graph."""
+def built_line(now: datetime | None = None) -> str:
+    """The line `Built YYYY-MM-DD HH:MM` in local time (`now` defaults to the current time)."""
+    now = datetime.now() if now is None else now
+    if now.tzinfo is not None:
+        now = now.astimezone()
+    return f"{BUILT_PREFIX}{now.strftime('%Y-%m-%d %H:%M')}"
+
+
+def build_pack(graph: Graph, size: str = "standard", project_root: Path | None = None,
+               now: datetime | None = None) -> str:
+    """Markdown resume pack of at most SIZES[size] characters; "" for an empty graph.
+
+    The third line says when it was built (local time, `now` defaults to the clock)."""
     if size not in SIZES:
         raise ValueError(f"unknown size {size!r}; expected one of {', '.join(SIZES)}")
     cap = SIZES[size]
@@ -94,9 +106,10 @@ def build_pack(graph: Graph, size: str = "standard", project_root: Path | None =
         request_text = _one_line(last_prompt.get("text", ""))
 
     name = project_root.name if project_root is not None and project_root.name else "project"
+    built = built_line(now)
 
     def render() -> str:
-        lines = [f"# Resume pack — {name}", DATA_NOTE]
+        lines = [f"# Resume pack — {name}", DATA_NOTE, built]
         if session_title:
             lines.append(f"Session: {session_title}")
         if request_text is not None:
@@ -127,10 +140,28 @@ def build_pack(graph: Graph, size: str = "standard", project_root: Path | None =
     return out[:cap]
 
 
-def write_pack(graph: Graph, mem_dir: Path, size: str = "standard", project_root: Path | None = None) -> Path:
-    """Write the pack to `mem_dir`/resume-pack.md atomically and return the path."""
+def _without_built(text: str) -> list[str]:
+    return [line for line in text.splitlines() if not line.startswith(BUILT_PREFIX)]
+
+
+def write_pack(graph: Graph, mem_dir: Path, size: str = "standard", project_root: Path | None = None,
+               now: datetime | None = None) -> Path | None:
+    """Write the pack to `mem_dir`/resume-pack.md atomically and return the path.
+
+    Never writes an empty pack: with nothing to pack an existing file is removed
+    and None is returned. When only the "Built" line would change, the file is
+    left alone, so a memory.png made with it still counts as current.
+    """
     path = Path(mem_dir) / PACK_FILE
-    text = build_pack(graph, size, project_root)
+    text = build_pack(graph, size, project_root, now)
+    if not text:
+        path.unlink(missing_ok=True)
+        return None
+    try:
+        if _without_built(path.read_text(encoding="utf-8")) == _without_built(text):
+            return path
+    except (OSError, ValueError):
+        pass  # missing or unreadable: write it
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:

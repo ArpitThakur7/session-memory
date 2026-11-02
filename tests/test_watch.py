@@ -435,3 +435,36 @@ def test_watch_cli_runs_watcher_and_never_raises(tmp_path, monkeypatch):
     out = io.StringIO()
     assert main(["watch", "--project", str(tmp_path)], io.StringIO(""), out) == 0
     assert out.getvalue() == "" and (tmp_path / ".claude/session-memory/error.log").exists()
+
+
+def test_build_packs_never_writes_an_empty_pack(tmp_path):   # I1
+    project, mem = setup_mem(tmp_path, with_graph=False)
+    (mem / "resume-pack.md").write_text("stale", encoding="utf-8")
+    watch._build_packs(mem, project)
+    assert not (mem / "resume-pack.md").exists() and not (mem / "error.log").exists()
+
+
+def test_long_turn_moves_deadline_instead_of_warning(tmp_path, monkeypatch):   # I2
+    monkeypatch.delenv("SESSION_MEMORY_CACHE_TTL_MIN", raising=False)
+    project, mem = setup_mem(tmp_path)
+    tr = write_transcript(tmp_path / "t.jsonl", T0)
+    dl1 = T0 + timedelta(minutes=60)
+    write_json_atomic(mem / "watch.json", {"deadline": dl1.isoformat(), "warn_min": 7,
+                                           "transcript": str(tr), "project": str(project)})
+    ft, nt = FakeTime(T0), FakeNotify()
+    at = []
+
+    def keep_working(t):  # the model is still busy inside one long turn: no Stop hook yet
+        if ft.now < (T0 + timedelta(minutes=40)).timestamp():
+            write_transcript(tr, datetime.fromtimestamp(ft.now, timezone.utc))
+
+    ft.on_sleep.append(keep_working)
+    assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep,
+                       notify=lambda t, m: at.append(ft.now) or nt(t, m)) == "notified"
+    assert len(at) == 1
+    data = json.loads((mem / "watch.json").read_text(encoding="utf-8"))
+    dl2 = datetime.fromisoformat(data["deadline"])
+    assert dl2 > dl1 + timedelta(minutes=30) and data["warn_min"] == 7
+    warn = (dl2 - timedelta(minutes=7)).timestamp()
+    assert warn <= at[0] < warn + 31
+    assert data["notified_for"] == data["deadline"]

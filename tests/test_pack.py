@@ -100,3 +100,34 @@ def test_write_pack_atomic(tmp_path):
     assert path == tmp_path / "resume-pack.md"
     assert path.read_text(encoding="utf-8").splitlines()[1] == DATA_NOTE
     assert [p.name for p in tmp_path.iterdir()] == ["resume-pack.md"]
+
+
+# ---- I1: built stamp, never an empty pack, unchanged pack keeps its file ------
+
+def test_built_line_follows_data_note():
+    from datetime import datetime, timezone
+    lines = pack.build_pack(graph_from_fixture(), "tiny", now=datetime(2026, 11, 2, 14, 30)).splitlines()
+    assert lines[1] == DATA_NOTE and lines[2] == "Built 2026-11-02 14:30"
+    aware = datetime(2026, 11, 2, 14, 30, tzinfo=timezone.utc)
+    local = aware.astimezone().strftime("%Y-%m-%d %H:%M")
+    assert pack.build_pack(graph_from_fixture(), now=aware).splitlines()[2] == f"Built {local}"
+    assert pack.build_pack(graph_from_fixture()).splitlines()[2].startswith("Built 20")
+
+
+def test_write_pack_never_writes_an_empty_pack(tmp_path):
+    (tmp_path / "resume-pack.md").write_text("old pack", encoding="utf-8")
+    assert pack.write_pack(Graph(), tmp_path) is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_pack_leaves_an_unchanged_pack_alone(tmp_path):
+    from datetime import datetime
+    g = graph_from_fixture()
+    path = pack.write_pack(g, tmp_path, now=datetime(2026, 11, 2, 9, 0))
+    os.utime(path, (1_000_000_000, 1_000_000_000))
+    assert pack.write_pack(g, tmp_path, now=datetime(2026, 11, 2, 10, 0)) == path
+    assert path.stat().st_mtime == 1_000_000_000  # same content: the picture made with it stays current
+    assert "Built 2026-11-02 09:00" in path.read_text(encoding="utf-8")
+    g.meta["last_prompt"]["text"] = "something new"
+    pack.write_pack(g, tmp_path, now=datetime(2026, 11, 2, 10, 0))
+    assert "Built 2026-11-02 10:00" in path.read_text(encoding="utf-8")

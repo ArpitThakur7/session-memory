@@ -241,3 +241,23 @@ def test_brief_points_to_packs_when_present(tmp_path):
     assert "Visual summary: open .claude/session-memory/memory.png" in b
     assert b.splitlines()[-1].startswith("For older details") and len(b) <= 9500
     assert len(build_brief(g, budget_chars=1200, mem_dir=tmp_path)) <= 1200
+
+
+def test_visual_pointer_only_when_picture_is_as_new_as_pack(tmp_path):   # I1
+    import os
+    g = graph_from_fixture()
+    (tmp_path / "resume-pack.md").write_text("x", encoding="utf-8")
+    (tmp_path / "memory.png").write_bytes(b"x")
+    os.utime(tmp_path / "memory.png", (1_000_000_000, 1_000_000_000))  # older than the pack
+    b = build_brief(g, mem_dir=tmp_path)
+    assert "Full resume pack" in b and "Visual summary" not in b
+    os.utime(tmp_path / "resume-pack.md", (1_000_000_000, 1_000_000_000))  # same age
+    assert "Visual summary" in build_brief(g, mem_dir=tmp_path)
+
+
+def test_footer_can_be_chosen():   # M7
+    from memgraph.brief import FOOTER, MCP_FOOTER
+    g = graph_from_fixture()
+    assert build_brief(g).splitlines()[-1] == FOOTER
+    assert build_brief(g, footer=MCP_FOOTER).splitlines()[-1] == MCP_FOOTER
+    assert MCP_FOOTER.startswith("For older details use the memory_recall tool.") and "/recall" not in MCP_FOOTER

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
-from memgraph.brief import build_brief
+from memgraph.brief import MCP_FOOTER, build_brief
 from memgraph.graph import Graph, GraphBusy, update
 from memgraph.ingest import memory_dir
 from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
@@ -87,7 +87,7 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
     graph_path = mem / "graph.json"
     graph = Graph.load(graph_path)  # re-read every call: the Stop hook keeps updating it
     if name == "memory_brief":
-        return [_text(build_brief(graph, project_root=project, mem_dir=mem) or "No project memory yet.")]
+        return [_text(build_brief(graph, project_root=project, mem_dir=mem, footer=MCP_FOOTER) or "No project memory yet.")]
     if name == "memory_recall":
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():

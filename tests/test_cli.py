@@ -251,3 +251,53 @@ def test_remember_text_capped_at_1000_chars(tmp_path, monkeypatch):   # M5
     assert rc == 2 and "1000" in out.replace(",", "")
     assert not (tmp_path / ".claude/session-memory/graph.json").exists()
     assert run(["remember", "y" * 1000], "") == "Saved to project memory.\n"
+
+
+DAY2_PROMPT = (
+    '{"type":"user","sessionId":"s2","timestamp":"2026-11-02T09:00:00.000Z",'
+    '"message":{"role":"user","content":"Day two: add the audit log"}}'
+)
+
+
+def test_session_start_refreshes_the_pack_it_points_at(tmp_path, monkeypatch):   # I1
+    payload = hook_input(tmp_path)
+    run(["hook-stop"], payload)
+    monkeypatch.chdir(tmp_path / "proj")
+    run(["pack", "--no-visual"], "")  # day 1 pack
+    mem = tmp_path / "proj/.claude/session-memory"
+    assert "Day two" not in (mem / "resume-pack.md").read_text(encoding="utf-8")
+    with open(tmp_path / "transcripts" / FIXTURE.name, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n" + DAY2_PROMPT + "\n")  # the fixture ends in a half-written line
+    run(["hook-stop"], payload)
+    out = run(["hook-session-start"], payload)
+    brief = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "Full resume pack: .claude/session-memory/resume-pack.md" in brief
+    text = (mem / "resume-pack.md").read_text(encoding="utf-8")
+    assert "Day two: add the audit log" in text and text.splitlines()[2].startswith("Built ")
+
+
+def test_session_start_points_at_picture_only_when_fresh(tmp_path):   # I1
+    import os
+    payload = hook_input(tmp_path)
+    mem = tmp_path / "proj/.claude/session-memory"
+    mem.mkdir(parents=True)
+    (mem / "memory.png").write_bytes(b"old picture")
+    os.utime(mem / "memory.png", (1_000_000_000, 1_000_000_000))
+    brief = json.loads(run(["hook-session-start"], payload))["hookSpecificOutput"]["additionalContext"]
+    assert "Full resume pack" in brief and "Visual summary" not in brief
+
+
+def test_session_start_removes_pack_when_nothing_to_pack(tmp_path):   # I1
+    payload = hook_input(tmp_path, transcripts=False)
+    mem = tmp_path / "proj/.claude/session-memory"
+    mem.mkdir(parents=True)
+    (mem / "resume-pack.md").write_text("stale", encoding="utf-8")
+    assert run(["hook-session-start"], payload) == ""
+    assert not (mem / "resume-pack.md").exists()
+
+
+def test_pack_cli_never_writes_an_empty_pack(tmp_path, monkeypatch):   # I1
+    monkeypatch.chdir(tmp_path)
+    out = run(["pack", "--no-visual"], "")
+    assert out == "Resume pack skipped: nothing to pack yet\n"
+    assert not (tmp_path / ".claude/session-memory/resume-pack.md").exists()

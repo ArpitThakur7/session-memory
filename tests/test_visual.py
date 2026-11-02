@@ -159,3 +159,24 @@ def test_scrub_urls_show_host_only_and_plain_text_is_untouched():
     assert visual.scrub("file:///C:/Users/me/a.txt") == "a.txt"
     for same in ("and/or", "1/2", "11/02/2026"):
         assert visual.scrub(same) == same
+
+
+def test_header_shows_data_note_and_built_stamp(tmp_path, monkeypatch):   # M4, I1
+    import re
+
+    pytest.importorskip("PIL")
+    from PIL import ImageDraw
+
+    from memgraph.brief import DATA_NOTE
+    drawn = []
+    orig = ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *a, **k):
+        drawn.append(text)
+        return orig(self, xy, text, *a, **k)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
+    visual.render_visual_pack(graph_from_fixture(), tmp_path / "m.png")
+    header = " ".join(drawn[:3])
+    assert DATA_NOTE in header
+    assert re.search(r"Built \d{4}-\d{2}-\d{2} \d{2}:\d{2}", header)

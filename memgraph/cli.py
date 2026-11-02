@@ -18,7 +18,7 @@ from memgraph.graph import Graph, GraphBusy, graph_lock, update
 from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, save_state
 from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
-from memgraph.pack import SIZES, write_pack
+from memgraph.pack import PACK_FILE, SIZES, write_pack
 from memgraph.viewer import write_map
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
@@ -64,6 +64,14 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         watch.arm(mem, Path(payload["transcript_path"]), Path(payload["cwd"]), now)
     elif name == "hook-session-start":
         graph = _ingest(payload, mem)
+        try:  # the brief points at the pack, so it must show what the brief shows
+            write_pack(graph, mem, "standard", Path(payload["cwd"]))
+        except Exception:
+            _log_error(mem)  # the brief still works without a fresh pack; never point at a stale one
+            try:
+                (mem / PACK_FILE).unlink(missing_ok=True)
+            except OSError:
+                pass
         brief = build_brief(graph, project_root=Path(payload["cwd"]), mem_dir=mem)
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
@@ -144,7 +152,8 @@ def _pack(args: list[str], stdout: TextIO) -> int:
         return 2
     project = Path.cwd()
     mem, graph = _project()
-    stdout.write(f"Resume pack: {write_pack(graph, mem, size, project)}\n")
+    written = write_pack(graph, mem, size, project)
+    stdout.write(f"Resume pack: {written}\n" if written else "Resume pack skipped: nothing to pack yet\n")
     if "--no-visual" not in args:
         target = mem / IMAGE_FILE
         if not has_story(graph):
