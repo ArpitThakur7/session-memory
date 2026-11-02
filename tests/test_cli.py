@@ -202,3 +202,13 @@ def test_pack_reports_missing_pillow(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path / "proj")
     monkeypatch.setattr("memgraph.cli.render_visual_pack", lambda *a, **k: None)
     assert run(["pack"], "").splitlines()[1] == "Visual pack skipped: install Pillow"
+
+
+def test_pack_empty_graph_says_nothing_to_draw_and_removes_stale_png(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    mem = tmp_path / ".claude/session-memory"
+    mem.mkdir(parents=True)
+    (mem / "memory.png").write_bytes(b"stale")
+    out = run(["pack"], "")
+    assert out.splitlines()[1] == "Visual pack skipped: nothing to draw yet"
+    assert not (mem / "memory.png").exists()
