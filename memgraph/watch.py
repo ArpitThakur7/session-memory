@@ -25,12 +25,13 @@ from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 WATCH_FILE = "watch.json"
 LOCK_FILE = "watch.lock"
 POLL_SECONDS = 30
-WARN_BEFORE = timedelta(minutes=10)
+MAX_LEAD_MINUTES = 10
 IDLE_EXIT_SECONDS = 2 * 3600
 LOCK_STALE_SECONDS = 10 * 60  # the watcher touches its lock every poll; older means it died or slept
 NOTIFY_TIMEOUT = 10
 TITLE = "Session memory"
-MESSAGE = "Claude cache expires in about 10 min. Resume pack ready — type /clear when you come back."
+MESSAGE = "Claude cache expires in about {lead} min. Resume pack ready — type /clear when you come back."
+EXPIRED_MESSAGE = "Claude cache has expired. Resume pack ready — type /clear when you come back."
 
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -64,6 +65,11 @@ def ttl_minutes() -> int:
 
 def deadline(last_reply: datetime, ttl: int) -> datetime:
     return last_reply + timedelta(minutes=ttl)
+
+
+def warn_lead_minutes(ttl: int) -> int:
+    """How long before the deadline to warn: min(10, ttl // 2) minutes, at least 1."""
+    return max(1, min(MAX_LEAD_MINUTES, ttl // 2))
 
 
 def _utc(dt: datetime) -> datetime:
@@ -134,8 +140,8 @@ def _acquire(lock: Path) -> bool:
                 return False
             try:
                 os.unlink(lock)  # stale: its watcher is gone
-            except FileNotFoundError:
-                pass
+            except OSError:
+                pass  # gone already, or held open (Windows sharing violation): retry, then give up
             continue
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(str(os.getpid()))
@@ -184,23 +190,41 @@ def arm(mem_dir: Path, transcript_path: Path, project: Path, now: datetime, spaw
     last, _context = last_activity(Path(transcript_path))
     if last is None:
         return
-    dl = deadline(_utc(last), ttl_minutes())
-    data = {"deadline": dl.isoformat(), "transcript": str(transcript_path), "project": str(project)}
+    ttl = ttl_minutes()
+    dl = deadline(_utc(last), ttl)
+    data = {"deadline": dl.isoformat(), "warn_min": warn_lead_minutes(ttl),
+            "transcript": str(transcript_path), "project": str(project)}
     notified_for = load_state(mem_dir / WATCH_FILE).get("notified_for")
     if isinstance(notified_for, str):
         data["notified_for"] = notified_for  # at most one warning per deadline, across re-arms
     write_json_atomic(mem_dir / WATCH_FILE, data)
-    if notified_for == data["deadline"] or _utc(now) >= dl - WARN_BEFORE:
-        return  # already warned, or too late to warn
+    if notified_for == data["deadline"]:
+        return  # this deadline was already announced; nothing left to watch
     if _lock_live(mem_dir / LOCK_FILE):
         return  # the running watcher picks up the new deadline itself
     (spawn or _spawn)(Path(project))
 
 
 def _mark_notified(mem_dir: Path, deadline_text: str) -> None:
-    data = load_state(mem_dir / WATCH_FILE)  # fresh read: a reply may have moved the deadline meanwhile
+    """Record the announced deadline, unless a reply has meanwhile moved it (then leave the file alone)."""
+    data = load_state(mem_dir / WATCH_FILE)
+    if data.get("deadline") != deadline_text:
+        return
     data["notified_for"] = deadline_text
     write_json_atomic(mem_dir / WATCH_FILE, data)
+
+
+def _pending(mem_dir: Path) -> tuple[str, datetime, int] | None:
+    """(deadline text, deadline, warning lead in minutes) if watch.json holds an unannounced deadline."""
+    data = load_state(mem_dir / WATCH_FILE)
+    text = data.get("deadline")
+    dl = parse_ts(text) if isinstance(text, str) else None
+    if dl is None or data.get("notified_for") == text:
+        return None
+    lead = data.get("warn_min")
+    if not isinstance(lead, int) or isinstance(lead, bool) or not 1 <= lead <= MAX_LEAD_MINUTES:
+        lead = MAX_LEAD_MINUTES
+    return text, _utc(dl), lead
 
 
 def _log(mem_dir: Path) -> None:
@@ -226,8 +250,9 @@ def _build_packs(mem_dir: Path, project: Path) -> None:
 
 def run_watcher(mem_dir: Path, project: Path, clock=time.time, sleep=time.sleep, notify=None) -> str:
     """Poll watch.json until it is time to warn. Returns why it stopped:
-    "notified", "expired" (deadline already passed, e.g. after sleep), "idle" (no pending deadline
-    for 2 h), "duplicate" (another watcher holds the lock) or "superseded" (it lost the lock)."""
+    "notified", "expired" (woke after the deadline, e.g. after sleep: packs built, told it expired),
+    "idle" (no pending deadline for 2 h), "duplicate" (another watcher holds the lock) or
+    "superseded" (it lost the lock). A reply that lands while it warns keeps it watching."""
     mem_dir, project = Path(mem_dir), Path(project)
     notify = notify or globals()["notify"]
     lock = mem_dir / LOCK_FILE
@@ -243,20 +268,19 @@ def run_watcher(mem_dir: Path, project: Path, clock=time.time, sleep=time.sleep,
             except OSError:
                 pass
             now = clock()
-            data = load_state(mem_dir / WATCH_FILE)
-            text = data.get("deadline")
-            dl = parse_ts(text) if isinstance(text, str) else None
-            if dl is not None and data.get("notified_for") != text:
+            pending = _pending(mem_dir)
+            if pending is not None:
                 idle_since = now
-                due = _utc(dl).timestamp()
-                if now >= due:
-                    _mark_notified(mem_dir, text)
-                    return "expired"
-                if now >= due - WARN_BEFORE.total_seconds():
+                text, dl, lead = pending
+                due = dl.timestamp()
+                if now >= due - lead * 60:
+                    outcome = "expired" if now >= due else "notified"
                     _build_packs(mem_dir, project)
                     _mark_notified(mem_dir, text)  # before notifying: a crash must not cause a repeat
-                    notify(TITLE, MESSAGE)
-                    return "notified"
+                    notify(TITLE, EXPIRED_MESSAGE if outcome == "expired" else MESSAGE.format(lead=lead))
+                    if _pending(mem_dir) is not None:
+                        continue  # a reply moved the deadline while we warned: keep watching
+                    return outcome
             elif now - idle_since >= IDLE_EXIT_SECONDS:
                 return "idle"
             sleep(POLL_SECONDS)

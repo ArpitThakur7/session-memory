@@ -117,14 +117,23 @@ def test_arm_skips_spawn_without_reply_or_when_already_notified(tmp_path):
     arm(mem, tr, project, T0, spawn=spawn)  # same deadline already warned about: at most once
     assert spawn.calls == []
     assert json.loads((mem / "watch.json").read_text(encoding="utf-8"))["notified_for"]
-    arm(mem, tr, project, T0 + timedelta(minutes=55), spawn=spawn)  # warning time already passed
-    assert spawn.calls == []
 
 
-def test_stale_lock_replaced(tmp_path):
+def test_arm_spawns_even_when_warning_time_passed(tmp_path, monkeypatch):
+    monkeypatch.delenv("SESSION_MEMORY_CACHE_TTL_MIN", raising=False)
     project, mem = setup_mem(tmp_path, with_graph=False)
     tr = write_transcript(tmp_path / "t.jsonl", T0)
-    dead = _dead_pid()
+    spawn = FakeSpawn()
+    arm(mem, tr, project, T0 + timedelta(minutes=55), spawn=spawn)  # only a live watcher prevents a spawn
+    arm(mem, tr, project, T0 + timedelta(minutes=90), spawn=spawn)
+    assert len(spawn.calls) == 2
+
+
+def test_stale_lock_replaced(tmp_path, monkeypatch):
+    project, mem = setup_mem(tmp_path, with_graph=False)
+    tr = write_transcript(tmp_path / "t.jsonl", T0)
+    dead = 424242
+    monkeypatch.setattr(watch, "pid_alive", lambda pid: pid == os.getpid())
     (mem / "watch.lock").write_text(str(dead), encoding="utf-8")
     spawn = FakeSpawn()
     arm(mem, tr, project, T0, spawn=spawn)
@@ -143,18 +152,46 @@ def test_stale_lock_replaced(tmp_path):
     assert seen and seen[0] == str(os.getpid())
 
 
-def test_watcher_exits_when_live_lock_held_by_other(tmp_path):
+def test_watcher_exits_when_live_lock_held_by_other(tmp_path, monkeypatch):
     project, mem = setup_mem(tmp_path)
     write_watch(mem, T0 + timedelta(minutes=11))
-    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    try:
-        (mem / "watch.lock").write_text(str(other.pid), encoding="utf-8")
-        ft, nt = FakeTime(T0), FakeNotify()
-        assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep, notify=nt) == "duplicate"
-        assert nt.calls == [] and (mem / "watch.lock").read_text(encoding="utf-8") == str(other.pid)
-    finally:
-        other.kill()
-        other.wait()
+    other = 424242
+    monkeypatch.setattr(watch, "pid_alive", lambda pid: pid == other)
+    (mem / "watch.lock").write_text(str(other), encoding="utf-8")
+    ft, nt = FakeTime(T0), FakeNotify()
+    assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep, notify=nt) == "duplicate"
+    assert nt.calls == [] and (mem / "watch.lock").read_text(encoding="utf-8") == str(other)
+
+
+def test_lock_stale_by_mtime_is_replaced(tmp_path, monkeypatch):
+    project, mem = setup_mem(tmp_path, with_graph=False)
+    tr = write_transcript(tmp_path / "t.jsonl", T0)
+    monkeypatch.setattr(watch, "pid_alive", lambda pid: True)  # pid "runs" (e.g. reused), but no heartbeat
+    lock = mem / "watch.lock"
+    lock.write_text("424242", encoding="utf-8")
+    old = lock.stat().st_mtime - 20 * 60
+    os.utime(lock, (old, old))
+    spawn = FakeSpawn()
+    arm(mem, tr, project, T0, spawn=spawn)
+    assert spawn.calls == [project]
+    os.utime(lock, None)  # fresh heartbeat: live
+    arm(mem, tr, project, T0, spawn=spawn)
+    assert len(spawn.calls) == 1
+
+
+def test_stale_lock_unlink_failure_does_not_crash_watcher(tmp_path, monkeypatch):
+    project, mem = setup_mem(tmp_path)
+    write_watch(mem, T0 + timedelta(minutes=11))
+    (mem / "watch.lock").write_text("424242", encoding="utf-8")
+    monkeypatch.setattr(watch, "pid_alive", lambda pid: False)
+
+    def locked(path, *a, **k):
+        raise PermissionError(32, "sharing violation")
+
+    monkeypatch.setattr(watch.os, "unlink", locked)
+    ft, nt = FakeTime(T0), FakeNotify()
+    assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep, notify=nt) == "duplicate"
+    assert nt.calls == []
 
 
 def test_watcher_notifies_at_minus_10_and_builds_packs(tmp_path):
@@ -192,14 +229,69 @@ def test_watcher_never_notifies_twice_for_same_deadline(tmp_path):
     assert nt.calls == []
 
 
-def test_missed_deadline_is_not_announced(tmp_path):
+def test_missed_deadline_builds_packs_and_says_expired(tmp_path):
     project, mem = setup_mem(tmp_path)
     dl = T0 - timedelta(minutes=1)  # e.g. the computer slept through the warning
     write_watch(mem, dl)
     ft, nt = FakeTime(T0), FakeNotify()
     assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep, notify=nt) == "expired"
-    assert nt.calls == []
+    assert [m for _t, m in nt.calls] == [
+        "Claude cache has expired. Resume pack ready — type /clear when you come back."]
+    assert (mem / "resume-pack.md").exists()
     assert json.loads((mem / "watch.json").read_text(encoding="utf-8"))["notified_for"] == dl.isoformat()
+
+
+def test_short_ttl_warns_at_half_ttl(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_MEMORY_CACHE_TTL_MIN", "5")
+    project, mem = setup_mem(tmp_path)
+    tr = write_transcript(tmp_path / "t.jsonl", T0)
+    spawn = FakeSpawn()
+    arm(mem, tr, project, T0 + timedelta(seconds=5), spawn=spawn)
+    assert spawn.calls == [project]
+    dl = T0 + timedelta(minutes=5)
+    ft, nt = FakeTime(T0 + timedelta(seconds=5)), FakeNotify()
+    at = []
+    assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep,
+                       notify=lambda t, m: at.append(ft.now) or nt(t, m)) == "notified"
+    warn = (dl - timedelta(minutes=2)).timestamp()
+    assert warn <= at[0] < warn + 31
+    assert nt.calls[0][1] == "Claude cache expires in about 2 min. Resume pack ready — type /clear when you come back."
+
+
+def test_warn_lead_minutes():
+    from memgraph.watch import warn_lead_minutes
+    assert [warn_lead_minutes(t) for t in (60, 20, 11, 5, 3, 2, 1)] == [10, 10, 5, 2, 1, 1, 1]
+
+
+def test_reply_during_notify_is_not_lost(tmp_path):
+    project, mem = setup_mem(tmp_path)
+    dl1 = T0 + timedelta(minutes=10)
+    write_watch(mem, dl1)
+    dl2 = T0 + timedelta(minutes=70)
+    ft, nt = FakeTime(T0), FakeNotify()
+    at = []
+
+    def notify_then_reply(title, message):
+        at.append(ft.now)
+        if len(at) == 1:
+            write_watch(mem, dl2)  # what arm() does when a reply lands now
+        return nt(title, message)
+
+    assert run_watcher(mem, project, clock=ft.clock, sleep=ft.sleep, notify=notify_then_reply) == "notified"
+    assert len(at) == 2 and at[1] >= (dl2 - timedelta(minutes=10)).timestamp()
+    data = json.loads((mem / "watch.json").read_text(encoding="utf-8"))
+    assert data["deadline"] == data["notified_for"] == dl2.isoformat()
+
+
+def test_mark_notified_leaves_moved_deadline_alone(tmp_path):
+    from memgraph.watch import _mark_notified
+    _project, mem = setup_mem(tmp_path, with_graph=False)
+    dl1, dl2 = T0, T0 + timedelta(minutes=30)
+    write_watch(mem, dl2)
+    _mark_notified(mem, dl1.isoformat())
+    assert "notified_for" not in json.loads((mem / "watch.json").read_text(encoding="utf-8"))
+    _mark_notified(mem, dl2.isoformat())
+    assert json.loads((mem / "watch.json").read_text(encoding="utf-8"))["notified_for"] == dl2.isoformat()
 
 
 def test_new_activity_moves_deadline(tmp_path):
@@ -285,15 +377,9 @@ def test_notify_passes_text_out_of_band():
     assert seen[-1][0][-2:] == [evil, evil]
 
 
-def _dead_pid():
-    p = subprocess.Popen([sys.executable, "-c", "pass"])
-    p.wait()
-    return p.pid
-
-
 def test_pid_alive():
     assert pid_alive(os.getpid()) is True
-    assert pid_alive(_dead_pid()) is False
+    assert pid_alive(999_999_996) is False  # far above any real pid on Windows/Linux/macOS
     assert pid_alive(0) is False and pid_alive(-1) is False
 
 

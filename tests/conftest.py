@@ -7,7 +7,7 @@ def _no_real_watcher(monkeypatch):
     import memgraph.watch as watch
 
     def refuse_spawn(project):
-        raise AssertionError("test tried to spawn a real watcher")
+        pass  # never start a real watcher (hook-stop tests arm with old fixture deadlines)
 
     def refuse_notify(title, message):
         raise AssertionError("test tried to show a real notification")
