@@ -1,0 +1,188 @@
+"""Minimal MCP server (stdio, newline-delimited JSON-RPC 2.0) exposing project memory."""
+from __future__ import annotations
+
+import base64
+import json
+import tempfile
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import BinaryIO
+
+from memgraph.brief import build_brief
+from memgraph.graph import Graph
+from memgraph.ingest import memory_dir
+from memgraph.memory_ops import recall_lines, remember
+from memgraph.pack import SIZES, build_pack
+from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
+
+SERVER_VERSION = "0.2.0"
+DEFAULT_PROTOCOL = "2024-11-05"
+
+TOOLS = [
+    {
+        "name": "memory_brief",
+        "description": "Short briefing of this project's memory: current task, recent decisions, files, open errors.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "memory_recall",
+        "description": "Search project memory (tasks, files, commands, errors, decisions) for a term.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Search term"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "memory_remember",
+        "description": "Save a decision or note to project memory.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "What to remember"}},
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "memory_pack",
+        "description": "Resume pack: a compact summary to continue the previous session in a fresh chat. Optionally with a PNG overview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "size": {"type": "string", "enum": list(SIZES), "default": "standard"},
+                "visual": {"type": "boolean", "default": False},
+            },
+        },
+    },
+]
+
+
+class _ParamError(Exception):
+    pass
+
+
+def _log(mem: Path | None) -> None:
+    text = traceback.format_exc()
+    targets = ([Path(mem) / "error.log"] if mem is not None else []) + [
+        Path(tempfile.gettempdir()) / "session-memory-error.log"
+    ]
+    for target in targets:
+        try:
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(f"{datetime.now(timezone.utc).isoformat()}\n{text}\n")
+            return
+        except Exception:
+            continue
+
+
+def _text(s: str) -> dict:
+    return {"type": "text", "text": s}
+
+
+def _call_tool(name: str, args: dict, mem: Path, project: Path) -> list[dict]:
+    if name not in {t["name"] for t in TOOLS}:
+        raise _ParamError(f"Unknown tool: {name}")
+    graph_path = mem / "graph.json"
+    graph = Graph.load(graph_path)  # re-read every call: the Stop hook keeps updating it
+    if name == "memory_brief":
+        return [_text(build_brief(graph, project_root=project) or "No project memory yet.")]
+    if name == "memory_recall":
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        query = query.strip()
+        lines = recall_lines(graph, query)
+        return [_text("\n".join(lines) if lines else f'Nothing found for "{query}".')]
+    if name == "memory_remember":
+        text = args.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must be a non-empty string")
+        remember(graph, text.strip(), datetime.now(timezone.utc))
+        graph.save(graph_path)
+        return [_text("Saved to project memory.")]
+    size = args.get("size", "standard")
+    visual = args.get("visual", False)
+    if size not in SIZES:
+        raise ValueError(f"size must be one of {', '.join(SIZES)}")
+    if not isinstance(visual, bool):
+        raise ValueError("visual must be a boolean")
+    content = [_text(build_pack(graph, size, project) or "No project memory yet.")]
+    if visual and has_story(graph):
+        png = render_visual_pack(graph, mem / IMAGE_FILE, project)
+        if png:
+            data = base64.b64encode(Path(png).read_bytes()).decode("ascii")
+            content.append({"type": "image", "data": data, "mimeType": "image/png"})
+        else:
+            content.append(_text("Visual pack unavailable: install Pillow"))
+    return content
+
+
+def _handle(msg, mem: Path, project: Path):
+    """Return a response dict, or None when no reply is due."""
+    if not isinstance(msg, dict) or not isinstance(msg.get("method"), str):
+        if isinstance(msg, dict) and "id" in msg and "method" not in msg:
+            return None  # a response from the client: ignore
+        return {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
+                "error": {"code": -32600, "message": "Invalid Request"}}
+    if "id" not in msg:
+        return None  # notification
+    rid, method = msg["id"], msg["method"]
+    params = msg.get("params")
+    params = params if isinstance(params, dict) else {}
+
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+    def err(code, message):
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+
+    if method == "initialize":
+        version = params.get("protocolVersion")
+        return ok({
+            "protocolVersion": version if isinstance(version, str) else DEFAULT_PROTOCOL,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "session-memory", "version": SERVER_VERSION},
+        })
+    if method == "ping":
+        return ok({})
+    if method == "tools/list":
+        return ok({"tools": TOOLS})
+    if method == "tools/call":
+        name, args = params.get("name"), params.get("arguments", {})
+        if not isinstance(name, str) or not isinstance(args, dict):
+            return err(-32602, "Invalid params")
+        try:
+            return ok({"content": _call_tool(name, args, mem, project), "isError": False})
+        except _ParamError as e:
+            return err(-32602, str(e))
+        except Exception as e:
+            _log(mem)
+            return ok({"content": [_text(f"Error: {e}")], "isError": True})
+    return err(-32601, f"Method not found: {method}")
+
+
+def serve(stdin: BinaryIO, stdout: BinaryIO, project: Path) -> None:
+    project = Path(project)
+    mem = memory_dir(project)
+
+    def send(obj) -> None:
+        stdout.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
+        stdout.flush()
+
+    for raw in stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+            continue
+        try:
+            resp = _handle(msg, mem, project)
+        except Exception:
+            _log(mem)
+            resp = {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
+                    "error": {"code": -32603, "message": "Internal error"}}
+        if resp is not None:
+            send(resp)

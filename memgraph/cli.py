@@ -14,14 +14,13 @@ from typing import TextIO
 
 from memgraph import watch
 from memgraph.brief import build_brief
-from memgraph.graph import Graph, _digest
+from memgraph.graph import Graph
 from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, save_state
+from memgraph.memory_ops import recall_lines, remember
 from memgraph.pack import SIZES, write_pack
 from memgraph.viewer import write_map
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
-
-_RECALL_MAX_CHARS = 2000
 
 
 def _log_error(mem: Path | None) -> None:
@@ -84,13 +83,7 @@ def _remember(args: list[str], stdout: TextIO, now: datetime) -> int:
         stdout.write("Usage: remember <text>\n")
         return 2
     mem, graph = _project()
-    ts = now.isoformat()
-    decision = graph.add_node("decision", _digest(text), text, ts)
-    last_prompt = graph.meta.get("last_prompt")
-    if isinstance(last_prompt, dict):
-        task = graph.meta.get("current_task", {}).get(last_prompt.get("session"))
-        if task:
-            graph.add_edge(task, "decided", decision, ts)
+    remember(graph, text, now)
     graph.save(mem / "graph.json")
     stdout.write("Saved to project memory.\n")
     return 0
@@ -99,20 +92,10 @@ def _remember(args: list[str], stdout: TextIO, now: datetime) -> int:
 def _recall(args: list[str], stdout: TextIO) -> int:
     term = " ".join(args).strip()
     _, graph = _project()
-    lines = []
-    for node in graph.search(term, 20):
-        label = " ".join(str(node.get("label", "")).split())
-        lines.append(f"[{node.get('kind')}] {label} (last {str(node.get('last') or '')[:10]})")
-    if not lines:
+    out = recall_lines(graph, term)
+    if not out:
         stdout.write(f'Nothing found for "{term}".\n')
         return 0
-    out, used = [], 0
-    for line in lines:
-        room = _RECALL_MAX_CHARS - used - 1
-        if room <= 0:
-            break
-        out.append(line[:room])
-        used += len(out[-1]) + 1
     stdout.write("\n".join(out) + "\n")
     return 0
 
@@ -172,6 +155,15 @@ def _watch(args: list[str]) -> int:
     return 0
 
 
+def _mcp(args: list[str]) -> int:
+    from memgraph.mcp_server import serve
+
+    i = args.index("--project") if "--project" in args else -1
+    project = Path(args[i + 1]) if 0 <= i < len(args) - 1 else Path.cwd()
+    serve(sys.stdin.buffer, sys.stdout.buffer, project)
+    return 0
+
+
 def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     cmd, args = (argv[0], argv[1:]) if argv else ("", [])
@@ -196,9 +188,11 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _stats(stdout)
     if cmd == "map":
         return _map(args, stdout)
+    if cmd == "mcp":
+        return _mcp(args)
     if cmd == "pack":
         return _pack(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | watch --project <dir>)\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | watch --project <dir> | mcp [--project <dir>])\n")
     return 2
 
 
