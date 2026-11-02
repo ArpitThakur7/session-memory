@@ -6,7 +6,10 @@ import pytest
 from memgraph import pack
 from memgraph.brief import DATA_NOTE, where_things_stand
 from memgraph.graph import Graph
+from memgraph import transcript
 from tests.helpers import graph_from_fixture
+
+_IST = __import__("datetime").timezone(__import__("datetime").timedelta(hours=5, minutes=30))
 
 
 def big_graph(n=2000) -> Graph:
@@ -104,12 +107,13 @@ def test_write_pack_atomic(tmp_path):
 
 # ---- I1: built stamp, never an empty pack, unchanged pack keeps its file ------
 
-def test_built_line_follows_data_note():
+def test_built_line_follows_data_note(monkeypatch):
+    monkeypatch.setattr(transcript, "_LOCAL_TZ", _IST)
     from datetime import datetime, timezone
     lines = pack.build_pack(graph_from_fixture(), "tiny", now=datetime(2026, 11, 2, 14, 30)).splitlines()
     assert lines[1] == DATA_NOTE and lines[2] == "Built 2026-11-02 14:30"
     aware = datetime(2026, 11, 2, 14, 30, tzinfo=timezone.utc)
-    local = aware.astimezone().strftime("%Y-%m-%d %H:%M")
+    local = aware.astimezone(_IST).strftime("%Y-%m-%d %H:%M")
     assert pack.build_pack(graph_from_fixture(), now=aware).splitlines()[2] == f"Built {local}"
     assert pack.build_pack(graph_from_fixture()).splitlines()[2].startswith("Built 20")
 
@@ -131,3 +135,12 @@ def test_write_pack_leaves_an_unchanged_pack_alone(tmp_path):
     g.meta["last_prompt"]["text"] = "something new"
     pack.write_pack(g, tmp_path, now=datetime(2026, 11, 2, 10, 0))
     assert "Built 2026-11-02 10:00" in path.read_text(encoding="utf-8")
+
+
+def test_timeline_dates_and_times_are_local(monkeypatch):
+    monkeypatch.setattr(transcript, "_LOCAL_TZ", _IST)
+    g = Graph()
+    g.apply(transcript.Event("prompt", "2026-11-01T20:00:00Z", "s1", {"text": "late request"}))
+    out = pack.build_pack(g, "standard")
+    assert "### 2026-11-02 s1" in out and "- 01:30 late request" in out
+    assert "Last request (2026-11-02 01:30): late request" in out

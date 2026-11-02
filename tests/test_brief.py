@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from memgraph.brief import build_brief
 from memgraph.graph import Graph
 from tests.helpers import graph_from_fixture
@@ -261,3 +263,23 @@ def test_footer_can_be_chosen():   # M7
     assert build_brief(g).splitlines()[-1] == FOOTER
     assert build_brief(g, footer=MCP_FOOTER).splitlines()[-1] == MCP_FOOTER
     assert MCP_FOOTER.startswith("For older details use the memory_recall tool.") and "/recall" not in MCP_FOOTER
+
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def test_brief_times_are_local(monkeypatch):
+    import memgraph.transcript as transcript
+    monkeypatch.setattr(transcript, "_LOCAL_TZ", _IST)
+    b = build_brief(graph_from_fixture())
+    assert "Last request (2026-11-01 15:30)" in b       # fixture: 10:00 UTC
+    assert "## Next steps (as of 2026-11-01 15:30)" in b
+
+
+def test_local_time_helper_defaults_to_machine_zone(monkeypatch):
+    import memgraph.transcript as transcript
+    monkeypatch.setattr(transcript, "_LOCAL_TZ", None)
+    ts = "2026-07-01T10:00:00Z"
+    assert transcript.local_time(ts) == datetime(2026, 7, 1, 10, tzinfo=timezone.utc).astimezone()
+    assert transcript.fmt_local(ts) == datetime(2026, 7, 1, 10, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    assert transcript.fmt_local("nonsense") == "" and transcript.local_time(None) is None

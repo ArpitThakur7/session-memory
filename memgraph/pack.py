@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from memgraph.brief import (DATA_NOTE, _changed_files, _fmt_ts, _newest, _one_line, _request_line,
                             where_things_stand)
 from memgraph.graph import Graph
+from memgraph.transcript import fmt_local, local_time
 
 SIZES = {"tiny": 2000, "standard": 8000, "deep": 24000}
 PACK_FILE = "resume-pack.md"
@@ -25,12 +26,8 @@ def _clip(text) -> str:
 
 
 def _time(ts) -> tuple[str, str]:
-    """(date, HH:MM) of an ISO timestamp; ("", "") when unparseable."""
-    try:
-        d = datetime.fromisoformat(str(ts or "").replace("Z", "+00:00"))
-    except ValueError:
-        return "", ""
-    return d.strftime("%Y-%m-%d"), d.strftime("%H:%M")
+    """Local (date, HH:MM) of a stored timestamp; ("", "") when unparseable."""
+    return fmt_local(ts, "%Y-%m-%d"), fmt_local(ts, "%H:%M")
 
 
 def _timeline(graph: Graph, with_commands: bool) -> list[str]:
@@ -63,9 +60,10 @@ def _timeline(graph: Graph, with_commands: bool) -> list[str]:
 
 def built_line(now: datetime | None = None) -> str:
     """The line `Built YYYY-MM-DD HH:MM` in local time (`now` defaults to the current time)."""
-    now = datetime.now() if now is None else now
-    if now.tzinfo is not None:
-        now = now.astimezone()
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if now.tzinfo is not None:  # a naive `now` is already local
+        now = local_time(now)
     return f"{BUILT_PREFIX}{now.strftime('%Y-%m-%d %H:%M')}"
 
 

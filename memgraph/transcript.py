@@ -31,6 +31,27 @@ def parse_ts(value) -> datetime | None:
     return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
+_LOCAL_TZ = None  # zone for displayed times; None means the machine's own zone
+
+
+def local_time(value) -> datetime | None:
+    """An ISO timestamp (or datetime; naive means UTC) in the zone used for display.
+
+    Stored timestamps stay UTC; every time shown to a person goes through here."""
+    ts = value if isinstance(value, datetime) else parse_ts(value)
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(_LOCAL_TZ)
+
+
+def fmt_local(value, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """`local_time(value)` formatted with `fmt`; "" when it does not parse."""
+    ts = local_time(value)
+    return ts.strftime(fmt) if ts is not None else ""
+
+
 @dataclass(frozen=True)
 class Event:
     kind: str  # prompt | edit | read | command | error | todo | todo_delta | usage | reply | title

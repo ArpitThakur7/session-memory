@@ -1,4 +1,14 @@
+from datetime import timezone
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _utc_display_zone(monkeypatch):
+    """Displayed times use the machine's zone; pin it to UTC so expectations hold on any machine."""
+    import memgraph.transcript as transcript
+
+    monkeypatch.setattr(transcript, "_LOCAL_TZ", timezone.utc)
 
 
 @pytest.fixture(autouse=True)
