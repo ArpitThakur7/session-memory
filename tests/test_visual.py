@@ -151,3 +151,11 @@ def test_meta_is_one_line_and_requests_capped_at_two_lines():
     g.add_edge(t, "failed", e, TS)
     lines = text_of(page(g)["flow"]).splitlines()
     assert lines[2].endswith("\u2026") and lines[3] == "changed 1 file \u00b7 failed: oops"
+
+
+def test_scrub_urls_show_host_only_and_plain_text_is_untouched():
+    assert visual.scrub("https://example.com/a/b.html") == "example.com"
+    assert visual.scrub("see http://localhost:8000/x/y now") == "see localhost:8000 now"
+    assert visual.scrub("file:///C:/Users/me/a.txt") == "a.txt"
+    for same in ("and/or", "1/2", "11/02/2026"):
+        assert visual.scrub(same) == same

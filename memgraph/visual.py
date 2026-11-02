@@ -34,7 +34,8 @@ _INDENT = 12
 _MAX_DECISIONS = 6
 
 _QUOTED = re.compile(r"`[^`]{41,}`|\"[^\"]{41,}\"|(?<!\w)'[^']{41,}'")
-_WIN_PATH = re.compile(r"[A-Za-z]:[\\/][^\s\"'`)\]>]*")
+_URL = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9+.-]*)://(\S+)")
+_WIN_PATH = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'`)\]>]*")
 _POSIX_PATH = re.compile(r"(?<![\w.:/])/(?:[^\s/\"'`)\]>]+/)+[^\s/\"'`)\]>]*")
 
 
@@ -46,6 +47,13 @@ def scrub(text) -> str:
     def base(m):
         return re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1] or "\u2026"
 
+    def url(m):  # a URL shows only its host (a file name for file://), never its path
+        rest = m.group(2).rstrip(".,;)")
+        if m.group(1).lower() == "file":
+            return re.split(r"[\\/]", rest.rstrip("\\/"))[-1] or "…"
+        return re.split(r"[/?#]", rest)[0].rsplit("@", 1)[-1]
+
+    text = _URL.sub(url, text)
     return _POSIX_PATH.sub(base, _WIN_PATH.sub(base, text))
 
 
