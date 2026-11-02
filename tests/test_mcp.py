@@ -151,3 +151,50 @@ def test_serve_subprocess_smoke(tmp_path):
     assert [r["id"] for r in replies] == [1, 2]
     assert len(replies[1]["result"]["tools"]) == 4
     assert p.returncode == 0
+
+
+def test_lone_surrogate_does_not_kill_server(tmp_path):
+    proj = seed(tmp_path)
+    raw = r'{"jsonrpc":"2.0","id":"\ud800","method":"tools/call","params":{"name":"memory_recall","arguments":{"query":"\ud800"}}}'
+    unknown = r'{"jsonrpc":"2.0","id":2,"method":"\ud800x"}'
+    out = drive(proj, raw, unknown, req(3, "ping"))
+    assert len(out) == 3 and out[2]["id"] == 3
+
+
+def test_deeply_nested_line_keeps_running(tmp_path):
+    out = drive(seed(tmp_path), "[" * 100000, req(2, "ping"))
+    assert out[0]["error"]["code"] == -32700 and out[0]["id"] is None
+    assert out[1]["id"] == 2
+
+
+def test_batch_array_rejected_and_next_line_works(tmp_path):
+    out = drive(seed(tmp_path), json.dumps([req(1, "ping")]), req(2, "ping"))
+    assert out[0]["error"]["code"] == -32600 and out[1]["id"] == 2
+
+
+def test_string_id_preserved(tmp_path):
+    (r,) = drive(seed(tmp_path), req("abc-1", "ping"))
+    assert r["id"] == "abc-1"
+
+
+def test_unwritable_project_still_initializes(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    init, tool = drive(blocker / "proj", req(1, "initialize", {"protocolVersion": "2024-11-05"}),
+                       call(2, "memory_brief"))
+    assert "result" in init
+    assert tool["result"]["isError"] is True
+
+
+def test_real_pillow_visual_png(tmp_path):
+    import importlib.util
+    import pytest
+    if importlib.util.find_spec("PIL") is None:
+        pytest.skip("Pillow not installed")
+    import struct
+    (r,) = drive(seed(tmp_path), call(1, "memory_pack", visual=True))
+    img = r["result"]["content"][1]
+    assert img["type"] == "image"
+    data = base64.b64decode(img["data"])
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    assert struct.unpack(">II", data[16:24]) == (1092, 1092)

@@ -79,9 +79,11 @@ def _text(s: str) -> dict:
     return {"type": "text", "text": s}
 
 
-def _call_tool(name: str, args: dict, mem: Path, project: Path) -> list[dict]:
+def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error: str = "") -> list[dict]:
     if name not in {t["name"] for t in TOOLS}:
         raise _ParamError(f"Unknown tool: {name}")
+    if mem is None:
+        raise RuntimeError(mem_error or "Memory folder unavailable")
     graph_path = mem / "graph.json"
     graph = Graph.load(graph_path)  # re-read every call: the Stop hook keeps updating it
     if name == "memory_brief":
@@ -117,7 +119,7 @@ def _call_tool(name: str, args: dict, mem: Path, project: Path) -> list[dict]:
     return content
 
 
-def _handle(msg, mem: Path, project: Path):
+def _handle(msg, mem: Path | None, project: Path, mem_error: str = ""):
     """Return a response dict, or None when no reply is due."""
     if not isinstance(msg, dict) or not isinstance(msg.get("method"), str):
         if isinstance(msg, dict) and "id" in msg and "method" not in msg:
@@ -152,7 +154,7 @@ def _handle(msg, mem: Path, project: Path):
         if not isinstance(name, str) or not isinstance(args, dict):
             return err(-32602, "Invalid params")
         try:
-            return ok({"content": _call_tool(name, args, mem, project), "isError": False})
+            return ok({"content": _call_tool(name, args, mem, project, mem_error), "isError": False})
         except _ParamError as e:
             return err(-32602, str(e))
         except Exception as e:
@@ -163,26 +165,41 @@ def _handle(msg, mem: Path, project: Path):
 
 def serve(stdin: BinaryIO, stdout: BinaryIO, project: Path) -> None:
     project = Path(project)
-    mem = memory_dir(project)
+    mem: Path | None = None
+    mem_error = ""
+    try:
+        mem = memory_dir(project)
+    except Exception as e:
+        _log(None)
+        mem_error = f"Memory folder unavailable: {e}"
 
     def send(obj) -> None:
-        stdout.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
+        try:
+            data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:  # lone surrogates: escape them instead of failing
+            data = json.dumps(obj, ensure_ascii=True).encode("ascii")
+        stdout.write(data + b"\n")
         stdout.flush()
 
     for raw in stdin:
         line = raw.strip()
         if not line:
             continue
+        msg = None
         try:
-            msg = json.loads(line.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
-            continue
-        try:
-            resp = _handle(msg, mem, project)
+            try:
+                msg = json.loads(line.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+                continue
+            resp = _handle(msg, mem, project, mem_error)
         except Exception:
             _log(mem)
-            resp = {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
-                    "error": {"code": -32603, "message": "Internal error"}}
+            rid = msg.get("id") if isinstance(msg, dict) else None
+            resp = None if isinstance(msg, dict) and "id" not in msg else {
+                "jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": "Internal error"}}
         if resp is not None:
-            send(resp)
+            try:
+                send(resp)
+            except Exception:
+                _log(mem)
