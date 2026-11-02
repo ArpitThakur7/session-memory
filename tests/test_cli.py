@@ -313,3 +313,72 @@ def test_session_start_rebuilds_pack_at_last_size_built(tmp_path, monkeypatch):
     monkeypatch.setattr("memgraph.cli.write_pack", lambda g, m, s, *a, **k: sizes.append(s) or real(g, m, s, *a, **k))
     run(["hook-session-start"], payload)
     assert sizes == ["deep"]
+
+
+# ---------------------------------------------------------------- token counter: events and transcripts dir
+
+def _events(tmp_path):
+    from memgraph.savings import read_events
+    return read_events(tmp_path / "proj/.claude/session-memory")
+
+
+def test_guard_block_logs_event_and_transcripts_dir(tmp_path):
+    out = run(["hook-prompt"], hook_input(tmp_path, prompt="continue"),
+              now=datetime(2026, 11, 1, 14, 0, tzinfo=timezone.utc), min_tokens=1000)
+    assert json.loads(out)["decision"] == "block"
+    (ev,) = _events(tmp_path)
+    assert ev["type"] == "guard_block" and ev["session"] == "s1" and ev["context"] == 42010 and ev["t"]
+    guard = json.loads((tmp_path / "proj/.claude/session-memory/guard.json").read_text(encoding="utf-8"))
+    assert guard["transcripts_dir"] == str(tmp_path / "transcripts")
+
+
+def test_allowed_prompt_logs_no_event(tmp_path):
+    run(["hook-prompt"], hook_input(tmp_path, prompt="go"), now=datetime(2026, 11, 1, 10, 5, tzinfo=timezone.utc))
+    assert _events(tmp_path) == []
+
+
+def test_session_start_logs_fresh_start_with_previous_session(tmp_path):
+    data = json.loads(hook_input(tmp_path, source="clear"))
+    data["session_id"] = "s-new"
+    out = run(["hook-session-start"], json.dumps(data))
+    brief = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    (ev,) = _events(tmp_path)
+    assert ev["type"] == "fresh_start" and ev["session"] == "s-new"
+    assert ev["brief_chars"] == len(brief)
+    assert ev["prev_session"] == "s1" and ev["prev_context"] == 42010
+    state = json.loads((tmp_path / "proj/.claude/session-memory/state.json").read_text(encoding="utf-8"))
+    assert state["transcripts_dir"] == str(tmp_path / "transcripts")
+
+
+def test_session_start_same_session_has_no_previous(tmp_path):
+    run(["hook-session-start"], hook_input(tmp_path))
+    (ev,) = _events(tmp_path)
+    assert ev["prev_session"] is None and ev["prev_context"] is None
+
+
+def test_session_start_resume_logs_nothing(tmp_path):
+    run(["hook-session-start"], hook_input(tmp_path, source="resume"))
+    assert _events(tmp_path) == []
+
+
+def test_session_start_without_brief_logs_nothing(tmp_path):
+    assert run(["hook-session-start"], hook_input(tmp_path, transcripts=False)) == ""
+    assert _events(tmp_path) == []
+
+
+def test_hook_stop_records_transcripts_dir(tmp_path):
+    run(["hook-stop"], hook_input(tmp_path))
+    state = json.loads((tmp_path / "proj/.claude/session-memory/state.json").read_text(encoding="utf-8"))
+    assert state["transcripts_dir"] == str(tmp_path / "transcripts")
+
+
+def test_event_log_failure_never_breaks_the_brief(tmp_path, monkeypatch):
+    import memgraph.savings as savings
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(savings, "append_event", boom)
+    out = run(["hook-session-start"], hook_input(tmp_path, source="clear"))
+    assert "Fix login test" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "disk full" in (tmp_path / "proj/.claude/session-memory/error.log").read_text(encoding="utf-8")

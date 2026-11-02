@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
-from memgraph import watch
+from memgraph import savings, watch
 from memgraph.brief import build_brief
 from memgraph.graph import Graph, GraphBusy, graph_lock, update
 from memgraph.guard import GuardConfig, decide, last_activity
@@ -50,7 +50,9 @@ def _ingest(payload: dict, mem: Path) -> Graph:
         with graph_lock(path):
             graph = Graph.load(path)
             state = load_state(mem / "state.json")
-            ingest_dir(Path(os.path.dirname(payload["transcript_path"])), graph, state)
+            transcripts = Path(os.path.dirname(payload["transcript_path"]))
+            state["transcripts_dir"] = str(transcripts)  # lets `usage`/`savings` find them later
+            ingest_dir(transcripts, graph, state)
             graph.save(path)
             save_state(mem / "state.json", state)
             return graph
@@ -75,13 +77,37 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         brief = build_brief(graph, project_root=Path(payload["cwd"]), mem_dir=mem)
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
+            if payload.get("source") in ("startup", "clear"):
+                _log_event(mem, _fresh_start(graph, payload, brief))
     else:  # hook-prompt
         state = load_state(mem / "guard.json")  # own file: never races ingest's state.json
+        state["transcripts_dir"] = os.path.dirname(payload["transcript_path"])
         last_ts, context = last_activity(Path(payload["transcript_path"]))
         reason = decide(now, last_ts, context, payload.get("prompt") or "", state, GuardConfig.from_env())
         save_state(mem / "guard.json", state)
         if reason:
             _emit(stdout, {"decision": "block", "reason": reason})
+            _log_event(mem, {"type": "guard_block", "session": payload.get("session_id"), "context": context})
+
+
+def _fresh_start(graph: Graph, payload: dict, brief: str) -> dict:
+    """The fresh_start event: the new session, its brief size, and the chat it replaces."""
+    new_sid = payload.get("session_id")
+    last = graph.meta.get("last_prompt")
+    prev = last.get("session") if isinstance(last, dict) else None
+    prev = prev if isinstance(prev, str) and prev and prev != new_sid else None
+    sess = (graph.meta.get("sessions") or {}).get(prev) if prev else None
+    ctx = sess.get("context") if isinstance(sess, dict) else None
+    return {"type": "fresh_start", "session": new_sid, "brief_chars": len(brief),
+            "prev_session": prev, "prev_context": ctx if isinstance(ctx, int) else None}
+
+
+def _log_event(mem: Path, event: dict) -> None:
+    """Append to events.jsonl; a failure is logged, never raised (the hook's output already went out)."""
+    try:
+        savings.append_event(mem, event)
+    except Exception:
+        _log_error(mem)
 
 
 def _emit(stdout: TextIO, obj: dict) -> None:
