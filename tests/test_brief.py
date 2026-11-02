@@ -227,3 +227,17 @@ def test_todo_content_truncated_to_200():                             # M1
     g.meta["last_todos"] = {"session": "s", "ts": "", "items": [{"content": "T" * 500, "status": "pending"}]}
     b = build_brief(g)
     assert "T" * 200 in b and "T" * 201 not in b
+
+
+def test_brief_points_to_packs_when_present(tmp_path):
+    g = graph_from_fixture()
+    plain = build_brief(g, mem_dir=tmp_path)
+    assert "Full resume pack" not in plain and "Visual summary" not in plain
+    (tmp_path / "resume-pack.md").write_text("x", encoding="utf-8")
+    b = build_brief(g, mem_dir=tmp_path)
+    assert "Full resume pack: .claude/session-memory/resume-pack.md" in b and "Visual summary" not in b
+    (tmp_path / "memory.png").write_bytes(b"x")
+    b = build_brief(g, mem_dir=tmp_path)
+    assert "Visual summary: open .claude/session-memory/memory.png" in b
+    assert b.splitlines()[-1].startswith("For older details") and len(b) <= 9500
+    assert len(build_brief(g, budget_chars=1200, mem_dir=tmp_path)) <= 1200

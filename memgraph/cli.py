@@ -56,7 +56,7 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         graph, state = _ingest(payload, mem)
         graph.save(mem / "graph.json")
         save_state(mem / "state.json", state)
-        brief = build_brief(graph, project_root=Path(payload["cwd"]))
+        brief = build_brief(graph, project_root=Path(payload["cwd"]), mem_dir=mem)
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
     else:  # hook-prompt

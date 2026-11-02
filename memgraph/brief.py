@@ -93,7 +93,23 @@ def _cut(text: str, overflow: int) -> str:
     return text[: max(0, len(text) - overflow)].rstrip()
 
 
-def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: Path | None = None) -> str:
+MEM_REL = ".claude/session-memory"
+
+
+def _pack_pointers(mem_dir: Path | None) -> list[str]:
+    """Lines pointing at the resume pack and picture, only for files that exist."""
+    if mem_dir is None:
+        return []
+    out = []
+    if (Path(mem_dir) / "resume-pack.md").is_file():
+        out.append(f"Full resume pack: {MEM_REL}/resume-pack.md")
+        if (Path(mem_dir) / "memory.png").is_file():
+            out.append(f"Visual summary: open {MEM_REL}/memory.png")
+    return out
+
+
+def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: Path | None = None,
+                mem_dir: Path | None = None) -> str:
     """Return a deterministic markdown brief of at most `budget_chars` characters.
 
     Returns "" for an empty graph. Section 1 (title, data note, session title,
@@ -104,7 +120,8 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
     last-request text are cut.
 
     With `project_root`, changed files inside it are shown relative to it and
-    absolute paths outside it are left out.
+    absolute paths outside it are left out. With `mem_dir`, lines pointing at an
+    existing resume-pack.md (and memory.png) are added before the footer.
     """
     nodes = list(graph.nodes.values())
     by_kind = lambda kind: [n for n in nodes if n.get("kind") == kind]  # noqa: E731
@@ -142,6 +159,8 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
         earlier = _earlier_requests(graph, last_prompt)
         reply_text = where_things_stand(graph)
 
+    pointers = _pack_pointers(mem_dir)
+
     def render() -> str:
         lines = [TITLE, DATA_NOTE]
         if session_title:
@@ -155,7 +174,7 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
         for heading, items in sections:
             if items:
                 lines += ["", heading, *items]
-        lines += ["", FOOTER]
+        lines += ["", *pointers, FOOTER]
         return "\n".join(lines)
 
     out = render()

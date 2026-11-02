@@ -40,6 +40,71 @@ The memory folder ignores itself in git: the plugin writes a `.gitignore` contai
 
 The page is one self-contained file, `.claude/session-memory/memory-map.html`. It loads nothing from the network and is git-ignored like the rest of the memory folder. Run the command again to refresh it.
 
+## Resume packs
+
+The brief is small on purpose. A resume pack is a bigger summary that you ask for when you need more. It is made from the same memory graph and costs 0 model tokens to build.
+
+Run this inside your project folder. Use the real folder where you keep this plugin (for example `C:\Users\you\Desktop\session-memory`):
+
+```
+C:\Users\you\Desktop\session-memory\bin\run-python pack --size standard
+```
+
+- `--size tiny` is about 2,000 characters. `standard` (the default) is about 8,000. `deep` is about 24,000.
+- It writes `.claude/session-memory/resume-pack.md`.
+- It also draws `.claude/session-memory/memory.png`, a 1092 x 1092 picture of the same story (about 1,590 image tokens). This needs the Pillow package (`pip install pillow`). Without Pillow the picture is skipped and the text pack still works. Add `--no-visual` to skip the picture.
+- When these files exist, the brief adds one line for each, so Claude knows where to look.
+
+To compare the sizes on your own transcripts:
+
+```
+python bench/compare_packs.py "C:\Users\you\.claude\projects\your-project-folder"
+python bench/compare_packs.py "C:\Users\you\.claude\projects\your-project-folder" --questions
+```
+
+Use your real user name and project folder. Do not type angle brackets. The first command prints a table: history tokens, then tiny, standard and deep pack tokens, then the picture. With `--questions` it also prints 10 questions with the expected answers. Ask a fresh chat the same questions with each pack and count the right answers. The answers come from your own transcripts, so keep that output on your machine.
+
+## Cache watcher
+
+After each reply, a small background process watches the clock. Claude Code's prompt cache lasts about 60 minutes. Before it ends, you get a desktop notification, so you can decide what to do before the next message becomes expensive.
+
+- The warning comes 10 minutes before the cache ends. If the cache time is short, it comes at half of that time.
+- If your computer was asleep and the time has passed, the notification says the cache "has expired".
+- Set `SESSION_MEMORY_CACHE_TTL_MIN` to change the cache time in minutes. The default is 60.
+- It is silent when it works. Errors go to `.claude/session-memory/error.log`.
+- Limit: there is one deadline for each project. If you have two chats open in the same project, the newest reply sets the deadline for both.
+
+## Use the memory in other tools
+
+The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember` and `memory_pack`.
+
+Two words in the snippets below are placeholders, not text to type:
+
+- `<repo>` means the folder where you keep this project, for example `C:\Users\you\Desktop\session-memory`.
+- `<your project>` means the folder of the project you work on.
+
+Replace them with your real folders. In PowerShell, do not type the angle brackets `<` and `>`.
+
+**Claude Code.** Run once:
+
+```
+claude mcp add session-memory -- "<repo>/bin/run-python" mcp --project "<your project>"
+```
+
+**VS Code.** Create `.vscode/mcp.json` in your project:
+
+```json
+{"servers": {"session-memory": {"type": "stdio", "command": "<repo>/bin/run-python", "args": ["mcp", "--project", "${workspaceFolder}"]}}}
+```
+
+**Antigravity.** Open `~/.gemini/antigravity/mcp_config.json`. On Windows this is `C:\Users\you\.gemini\antigravity\mcp_config.json`. Do not replace the file: it already has other servers. Add this entry inside `mcpServers`:
+
+```json
+"session-memory": {"command": "python", "args": ["-m", "memgraph.cli", "mcp", "--project", "<your project>"], "env": {"PYTHONPATH": "<repo>"}}
+```
+
+Antigravity on Windows may not run bash scripts, so this entry calls Python directly. In JSON files, write a Windows path with double backslashes (`C:\Users\you\Desktop\session-memory`) or with forward slashes (`C:/Users/you/Desktop/session-memory`).
+
 ## Configuration
 
 Set these environment variables before starting Claude Code.
@@ -60,6 +125,7 @@ Everything is under `<project>/.claude/session-memory/`:
 - `graph.json` - the memory graph
 - `state.json` - how far each transcript has been read
 - `guard.json` - the cache guard's "already warned about this message" note
+- `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command)
 - `error.log` - any internal errors (the plugin never blocks your work if it fails)
 - `.gitignore` - contains `*`, so none of the above is committed
 
