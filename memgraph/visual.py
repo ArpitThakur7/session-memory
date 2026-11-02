@@ -132,6 +132,15 @@ def _lines(graph: Graph, font, col_w: int):
         for er in s_errors:
             for ln in _wrap("failed: " + str(er.get("label", "")), font, col_w - 14, 1):
                 yield 14, ln, "red"
+    linked = {e.get("dst") for e in graph.edges.values() if e.get("rel") == "decided"}
+    loose = _newest([n for n in graph.nodes.values() if n.get("kind") == "decision" and n.get("id") not in linked], 5)
+    if loose:
+        if not first:
+            yield 0, "", "ink"
+        yield 0, "Decisions", "head"
+        for d in loose:
+            for i, ln in enumerate(_wrap(str(d.get("label", "")), font, col_w - 14, 2)):
+                yield (0, "\u2022 " + ln, "ink") if i == 0 else (14, ln, "ink")
 
 
 def render_visual_pack(graph: Graph, path: Path, project_root: Path | None = None) -> Path | None:
