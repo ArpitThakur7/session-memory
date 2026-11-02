@@ -145,6 +145,21 @@ body.side-closed #sideOpen { opacity: 1; pointer-events: auto; }
   display: flex; align-items: center; gap: 6px;
 }
 .section > h2 .n { font-weight: 500; letter-spacing: 0; }
+.range { display: flex; gap: 2px; padding: 3px; margin: 0 12px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--field); }
+.range button {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
+  min-height: 38px; padding: 3px 2px; border: 0; border-radius: 7px; background: transparent; cursor: pointer;
+  font-size: 11.5px; line-height: 1.2; color: var(--ink-2); transition: background .15s, color .15s;
+}
+.range button:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.range button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.range button .n { font-size: 10px; color: inherit; opacity: .75; font-variant-numeric: tabular-nums; }
+.range-label { margin: 2px 14px 5px; font-size: 10.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+#rangeEmpty {
+  position: fixed; inset: 0; z-index: 1; display: none; place-items: center; padding: 24px; text-align: center;
+  pointer-events: none; font-size: 15px; color: var(--ink-2);
+}
+body.range-empty #rangeEmpty { display: grid; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 6px; }
 .chip {
   --c: #888780;
@@ -285,6 +300,8 @@ body.preload * { transition: none !important; }
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
 </button>
 
+<div id="rangeEmpty" role="status" aria-live="polite"></div>
+
 <aside id="sidebar" class="panel" aria-label="Memory overview">
   <div class="side-head">
     <div class="logo" aria-hidden="true">
@@ -298,6 +315,8 @@ body.preload * { transition: none !important; }
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
     </button>
   </div>
+  <div id="rangeLabel" class="range-label">Time range</div>
+  <div id="range" class="range" role="group" aria-labelledby="rangeLabel"></div>
   <div class="search-wrap">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
     <input id="search" type="search" placeholder="Search everything" autocomplete="off" spellcheck="false" aria-label="Search all memory">
@@ -527,6 +546,52 @@ const DATA = /*__MEMORY_DATA__*/null;
   for (const it of items.values()) if (!it.isRoot) kindCounts.set(it.kind, (kindCounts.get(it.kind) || 0) + 1);
   const totalNodes = items.size - 1;
 
+  // ------------------------------------------------------------------ time range
+  const RANGES = [
+    { id: '1h', label: '1 hour', ms: 36e5, phrase: 'hour' },
+    { id: '5h', label: '5 hours', ms: 5 * 36e5, phrase: '5 hours' },
+    { id: '1d', label: '1 day', ms: 864e5, phrase: 'day' },
+    { id: '7d', label: '7 days', ms: 7 * 864e5, phrase: '7 days' },
+    { id: 'all', label: 'All time', ms: 0, phrase: '' },
+  ];
+  const RANGE_KEY = 'session-memory.timeRange';
+  for (const it of items.values()) it.lt = it.isRoot ? 0 : tsOf(it.last);
+  const rangeCounts = new Map();
+  {
+    const t0 = Date.now();
+    for (const r of RANGES) {
+      let n = 0;
+      for (const it of items.values()) if (!it.isRoot && (!r.ms || (it.lt && it.lt >= t0 - r.ms))) n++;
+      rangeCounts.set(r.id, n);
+    }
+  }
+  let range = RANGES[RANGES.length - 1];
+  try {
+    const saved = localStorage.getItem(RANGE_KEY);
+    const found = RANGES.find((r) => r.id === saved);
+    if (found) range = found;
+  } catch (err) { /* storage unavailable */ }
+  let rangeKindCounts = kindCounts;
+  let rangeTotal = totalNodes;
+  // inR: inside the range; keep: inside it, or an ancestor of something that is
+  function computeRange() {
+    const cutoff = range.ms ? Date.now() - range.ms : 0;
+    rangeKindCounts = new Map();
+    rangeTotal = 0;
+    for (const it of items.values()) {
+      it.inR = !it.isRoot && (!range.ms || (it.lt > 0 && it.lt >= cutoff));
+      it.keep = it.inR || it.isRoot;
+    }
+    for (const it of items.values()) {
+      if (!it.inR) continue;
+      rangeTotal++;
+      rangeKindCounts.set(it.kind, (rangeKindCounts.get(it.kind) || 0) + 1);
+      for (let p = it.parent; p && !p.keep; p = p.parent) p.keep = true;
+    }
+  }
+  computeRange();
+  const inRangeList = (g) => (range.ms ? g.list.filter((c) => c.keep) : g.list);
+
   function defaultExpansion() {
     for (const it of items.values()) { it.expanded = false; it.shown = Object.create(null); }
     root.expanded = true;
@@ -621,8 +686,9 @@ const DATA = /*__MEMORY_DATA__*/null;
         const lim = n.shown[g.kind] === undefined ? GROUP_LIMIT : n.shown[g.kind];
         const from = spawnFrom.get(n.id + '\u0001' + g.kind) || n;
         let hidden = 0;
-        for (let i = 0; i < g.list.length; i++) {
-          const c = g.list[i];
+        const lst = inRangeList(g);
+        for (let i = 0; i < lst.length; i++) {
+          const c = lst[i];
           const forced = !!(force && force.has(c));
           if ((i < lim || forced) && (visible.length < CAP || forced)) add(c, from);
           else { hidden++; if (i < lim) truncated = true; }
@@ -707,7 +773,7 @@ const DATA = /*__MEMORY_DATA__*/null;
   function expandBundle(b) {
     const p = b.parent;
     const g = p.groups.find((x) => x.kind === b.baseKind);
-    p.shown[b.baseKind] = g ? g.list.length : Infinity;
+    p.shown[b.baseKind] = g ? inRangeList(g).length : Infinity;
     spawnFrom.set(p.id + '\u0001' + b.baseKind, b);
     if (selected === b) clearSelection();
     rebuild();
@@ -720,7 +786,7 @@ const DATA = /*__MEMORY_DATA__*/null;
       const par = p.parent;
       par.expanded = true;
       const g = par.groups.find((x) => x.kind === p.kind);
-      const idx = g ? g.list.indexOf(p) : -1;
+      const idx = g ? inRangeList(g).indexOf(p) : -1;
       const lim = par.shown[p.kind] === undefined ? GROUP_LIMIT : par.shown[p.kind];
       if (idx >= lim) par.shown[p.kind] = idx + 1;
     }
@@ -999,6 +1065,10 @@ const DATA = /*__MEMORY_DATA__*/null;
     for (const h of matchSet) if (!isDrawn(h)) matchRep.add(rep(h));
   }
   function emphasis(it) {
+    const e = emphasis0(it);
+    return range.ms && !it.isRoot && !it.isBundle && !it.inR ? e * 0.5 : e;
+  }
+  function emphasis0(it) {
     if (selected && selected.vis) {
       if (!neighbors().has(it)) return 0.2;
     }
@@ -1493,7 +1563,7 @@ const DATA = /*__MEMORY_DATA__*/null;
   $('projName').textContent = String(DATA.project || 'Project');
   function updateCounts() {
     const shown = drawn.length - 1;
-    $('projSub').textContent = plural(totalNodes, 'item', 'items') + ' · ' + shown + ' shown'
+    $('projSub').textContent = plural(rangeTotal, 'item', 'items') + ' · ' + shown + ' shown'
       + (DATA.generated ? ' · ' + fmtDate(DATA.generated) : '');
   }
   function setSidebar(open) {
@@ -1514,7 +1584,7 @@ const DATA = /*__MEMORY_DATA__*/null;
       b.style.setProperty('--c', info.color);
       b.setAttribute('aria-pressed', hiddenKinds.has(k) ? 'false' : 'true');
       b.title = (hiddenKinds.has(k) ? 'Show ' : 'Hide ') + info.plural.toLowerCase();
-      b.append(el('span', 'dot'), el('span', 'lbl', info.plural), el('span', 'n', String(kindCounts.get(k))));
+      b.append(el('span', 'dot'), el('span', 'lbl', info.plural), el('span', 'n', String(rangeKindCounts.get(k) || 0)));
       b.addEventListener('click', () => {
         if (hiddenKinds.has(k)) hiddenKinds.delete(k); else hiddenKinds.add(k);
         if (selected && hiddenKinds.has(selected.kind)) clearSelection();
@@ -1590,11 +1660,11 @@ const DATA = /*__MEMORY_DATA__*/null;
   function renderSessions() {
     const box = $('sessions');
     box.replaceChildren();
-    const list = [...items.values()].filter((it) => it.kind === 'session').sort(newestFirst);
+    const list = [...items.values()].filter((it) => it.kind === 'session' && it.keep).sort(newestFirst);
     $('sessCount').textContent = list.length ? String(list.length) : '';
-    if (!list.length) { box.append(el('div', 'empty-note', 'No sessions recorded.')); return; }
+    if (!list.length) { box.append(el('div', 'empty-note', range.ms ? 'No sessions in this range.' : 'No sessions recorded.')); return; }
     for (const s of list) {
-      const asked = s.groups ? (s.groups.find((g) => g.kind === 'task') || { list: [] }).list.length : 0;
+      const asked = s.groups ? inRangeList(s.groups.find((g) => g.kind === 'task') || { list: [] }).length : 0;
       const meta = fmtDate(s.last || s.first) + ' · ' + plural(asked, 'request', 'requests') + (s.context ? ' · ' + fmtTokens(s.context) + ' context' : '');
       const b = row(s, meta, true);
       b.addEventListener('click', () => {
@@ -1605,6 +1675,40 @@ const DATA = /*__MEMORY_DATA__*/null;
       });
       box.append(b);
     }
+  }
+
+  // time range picker
+  function rangeNotice() {
+    const none = !!range.ms && rangeTotal === 0;
+    doc.body.classList.toggle('range-empty', none);
+    $('rangeEmpty').textContent = none ? 'Nothing in the last ' + range.phrase + '. Try a longer range.' : '';
+  }
+  function renderRange() {
+    const box = $('range');
+    box.replaceChildren();
+    for (const r of RANGES) {
+      const b = el('button');
+      b.type = 'button';
+      b.setAttribute('aria-pressed', r === range ? 'true' : 'false');
+      b.title = r.ms ? 'Only items from the last ' + r.label.toLowerCase() : 'Show everything';
+      b.append(el('span', 'lbl', r.label), el('span', 'n', String(rangeCounts.get(r.id))));
+      b.addEventListener('click', () => applyRange(r));
+      box.append(b);
+    }
+  }
+  function applyRange(r) {
+    range = r;
+    try { localStorage.setItem(RANGE_KEY, r.id); } catch (err) { /* storage unavailable */ }
+    computeRange();
+    renderRange();
+    renderChips();
+    renderSessions();
+    rebuild();
+    if (selected && !selected.vis) clearSelection();
+    rangeNotice();
+    runSearch(searchInput.value);
+    reheat(0.8);
+    tween = null; tracking = null; autoFit = true;
   }
 
   // search
@@ -1631,7 +1735,7 @@ const DATA = /*__MEMORY_DATA__*/null;
     }
     sidebar.classList.add('searching');
     const hits = [];
-    for (const it of items.values()) if (!it.isRoot && it.search.includes(q)) hits.push(it);
+    for (const it of items.values()) if (!it.isRoot && it.inR && it.search.includes(q)) hits.push(it);
     hits.sort(newestFirst);
     matchSet = new Set(hits);
     refreshMatches();
@@ -1801,10 +1905,12 @@ const DATA = /*__MEMORY_DATA__*/null;
   });
   readTheme();
   if (innerWidth <= 860) doc.body.classList.add('side-closed');
+  renderRange();
   renderChips();
   renderBrief();
   renderSessions();
   rebuild();
+  rangeNotice();
   resize();
   for (let i = 0; i < 70; i++) tick();
   const first = fitGoal(drawn, 80);

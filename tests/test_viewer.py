@@ -119,3 +119,9 @@ def test_where_things_stand_only_from_last_requests_session():
     assert build_view_data(g, "p")["brief"]["where"] == ""
     g.meta["last_reply"] = {"text": "Logout added", "ts": "2026-11-01T10:01:00Z", "session": "a"}
     assert build_view_data(g, "p")["brief"]["where"] == "Logout added"
+
+
+def test_page_has_time_range_picker():
+    html = render_map(graph_from_fixture(), "RepoQuest")
+    for label in ("1 hour", "5 hours", "1 day", "7 days", "All time", "Time range"):
+        assert label in html
