@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
+from memgraph import watch
 from memgraph.brief import build_brief
 from memgraph.graph import Graph, _digest
 from memgraph.guard import GuardConfig, decide, last_activity
@@ -51,6 +52,7 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         graph, state = _ingest(payload, mem)
         graph.save(mem / "graph.json")
         save_state(mem / "state.json", state)
+        watch.arm(mem, Path(payload["transcript_path"]), Path(payload["cwd"]), now)
     elif name == "hook-session-start":
         graph, state = _ingest(payload, mem)
         graph.save(mem / "graph.json")
@@ -157,6 +159,19 @@ def _pack(args: list[str], stdout: TextIO) -> int:
     return 0
 
 
+def _watch(args: list[str]) -> int:
+    """Background cache watcher (started detached by hook-stop). Silent; errors go to error.log."""
+    mem = None
+    try:
+        i = args.index("--project") if "--project" in args else -1
+        project = Path(args[i + 1]) if 0 <= i < len(args) - 1 else Path.cwd()
+        mem = memory_dir(project)
+        watch.run_watcher(mem, project)
+    except Exception:
+        _log_error(mem)
+    return 0
+
+
 def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     cmd, args = (argv[0], argv[1:]) if argv else ("", [])
@@ -171,6 +186,8 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         except Exception:
             _log_error(mem)
         return 0
+    if cmd == "watch":
+        return _watch(args)
     if cmd == "remember":
         return _remember(args, stdout, now)
     if cmd == "recall":
@@ -181,7 +198,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _map(args, stdout)
     if cmd == "pack":
         return _pack(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual])\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | watch --project <dir>)\n")
     return 2
 
 
