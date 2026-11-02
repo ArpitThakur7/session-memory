@@ -154,3 +154,84 @@ def test_view_data_tokens_from_transcripts(tmp_path):
     assert "all time" in html_t and "cache_state" in html_t
     html = render_map(graph_from_fixture(), "p", tokens=tokens)
     assert embedded_data(html)["tokens"]["totals"]["replies"] == 7
+
+
+# ---------------------------------------------------------------- session tape
+
+def _tape_tokens(tmp_path, ttl=60):
+    from datetime import datetime, timezone
+
+    from memgraph.savings import token_view
+    from tests.test_savings import seed
+
+    t, mem = seed(tmp_path)
+    return token_view(t, mem, now=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc), ttl_minutes=ttl)
+
+
+def test_tape_ticks_are_main_replies_only_sorted_numbers(tmp_path):
+    tape = _tape_tokens(tmp_path)["tape"]
+    assert tape["available"] is True and tape["ttl_minutes"] == 60
+    ticks = tape["ticks"]
+    # old: 3 replies (duplicate dropped), new: 2 replies; the helper's 2 replies never appear
+    assert [tk[0][:16] for tk in ticks] == ["2026-11-01T09:00", "2026-11-01T09:01", "2026-11-01T11:01",
+                                            "2026-11-01T11:30", "2026-11-01T11:31"]
+    assert all(len(tk) == 4 for tk in ticks)
+    assert ticks[0][1] == 3 + 120000 and ticks[0][2] == 120000
+    assert ticks[1][1] == 3 + 500 + 119000 and ticks[1][2] == 500
+    assert ticks[0][3] == pytest.approx((3 * 4 + 120000 * 8 + 50 * 20) / 1e6)
+    assert all(isinstance(tk[1], int) and isinstance(tk[2], int) for tk in ticks)
+
+
+def test_tape_restarts_and_fresh_starts(tmp_path):
+    tape = _tape_tokens(tmp_path)["tape"]
+    (r,) = tape["restarts"]
+    assert r["t"].startswith("2026-11-01T11:01") and r["session"] == "session:old"
+    assert r["idle_minutes"] == 120 and r["rebuild_tokens"] == 120000
+    assert r["rebuild_usd"] == pytest.approx(120000 * 8.0 / 1e6)
+    (f,) = tape["fresh_starts"]
+    assert f["t"].startswith("2026-11-01T11:30") and f["session"] == "session:new"
+    assert f["saved"] == 120003 - 20004 and f["cache_state"] == "warm"
+    assert set(r) == {"t", "session", "idle_minutes", "rebuild_tokens", "rebuild_usd"}
+    assert set(f) == {"t", "session", "saved", "cache_state"}
+
+
+def test_tape_is_capped_to_most_recent(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from memgraph.savings import tape_view
+    from memgraph.usage import Reply, UsageResult
+
+    t0 = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    replies = [Reply(ts=t0 + timedelta(seconds=i), session="s", model="x", helper=False, input=i,
+                     cache_write_5m=0, cache_write_1h=0, cache_write_unknown=0, cache_read=0, output=0)
+               for i in range(30)]
+    tape = tape_view(UsageResult(replies=replies), {"fresh_starts": [], "cold_restarts": []}, 5, cap=10)
+    assert [tk[1] for tk in tape["ticks"]] == list(range(20, 30))
+    assert tape["ticks"][0][3] is None  # unknown model: no price
+    assert tape["truncated"] == 20
+
+
+def test_tape_carries_no_transcript_text(tmp_path):
+    tape = _tape_tokens(tmp_path)["tape"]
+    blob = json.dumps(tape)
+    assert '"ok"' not in blob and "assistant" not in blob
+
+
+def test_view_data_tape_top_level_and_not_duplicated(tmp_path):
+    tokens = _tape_tokens(tmp_path)
+    data = build_view_data(graph_from_fixture(), "p", tokens=tokens)
+    assert data["tape"]["available"] is True and len(data["tape"]["ticks"]) == 5
+    assert "tape" not in data["tokens"]
+    assert "tape" in tokens  # the caller's dict is not changed
+    html = render_map(graph_from_fixture(), "p", tokens=tokens)
+    assert len(embedded_data(html)["tape"]["ticks"]) == 5
+
+
+def test_view_data_tape_degrades_without_transcripts(tmp_path):
+    from memgraph.savings import token_view
+
+    data = build_view_data(graph_from_fixture(), "p")
+    assert data["tape"]["available"] is False and data["tape"]["reason"]
+    missing = token_view(tmp_path / "nope", tmp_path)
+    data = build_view_data(graph_from_fixture(), "p", tokens=missing)
+    assert data["tape"] == {"available": False, "reason": missing["reason"]}

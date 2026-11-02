@@ -212,6 +212,26 @@ def format_savings(res: dict) -> str:
 
 _MAP_DAYS = 14
 _MAP_ROWS = 20
+TAPE_CAP = 5000
+
+
+def tape_view(usage: UsageResult, sav: dict, ttl_minutes: int, cap: int = TAPE_CAP) -> dict:
+    """The map's session tape: numbers only, never transcript text.
+
+    ticks: one [time ISO, context tokens, cache-write tokens, dollars or None] per real
+    main-chat reply (helpers left out), oldest first, the most recent `cap` kept.
+    restarts / fresh_starts: from measure_savings, sessions in the map's "session:<id>" form."""
+    main = [r for r in usage.replies if not r.helper]
+    kept = main[-cap:] if cap > 0 else []
+    ticks = [[r.ts.isoformat(), r.context, r.cache_write, reply_cost(r)] for r in kept]
+    restarts = [{"t": r["t"], "session": f"session:{r['session']}", "idle_minutes": r["idle_minutes"],
+                 "rebuild_tokens": r["rebuild_tokens"], "rebuild_usd": r["rebuild_usd"]}
+                for r in sav.get("cold_restarts", [])]
+    fresh = [{"t": f["t"], "session": f"session:{f['session']}", "saved": f["saved"],
+              "cache_state": f["cache_state"]}
+             for f in sav.get("fresh_starts", []) if isinstance(f.get("t"), str)]
+    return {"available": True, "ttl_minutes": ttl_minutes, "ticks": ticks,
+            "truncated": len(main) - len(kept), "restarts": restarts, "fresh_starts": fresh}
 
 
 def token_view(transcripts_dir: Path | None, mem_dir: Path, now: datetime | None = None,
@@ -252,4 +272,5 @@ def token_view(transcripts_dir: Path | None, mem_dir: Path, now: datetime | None
         "who": summarize(recent, "who"),
         "savings": {"totals": sav["totals"], "fresh_starts": sav["fresh_starts"][-_MAP_ROWS:],
                     "cold_restarts": sav["cold_restarts"][-_MAP_ROWS:]},
+        "tape": tape_view(usage, sav, ttl_minutes),
     }

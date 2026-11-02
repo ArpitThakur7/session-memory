@@ -33,7 +33,9 @@ def _label(node: dict, project_root: Path | None) -> str:
 
 def build_view_data(graph: Graph, project_name: str, project_root: Path | None = None,
                     tokens: dict | None = None) -> dict:
-    """The plain JSON-able data the map page draws (`tokens` from savings.token_view)."""
+    """The plain JSON-able data the map page draws (`tokens` from savings.token_view).
+
+    The session tape inside `tokens` is lifted to the top-level `tape` key."""
     nodes = [
         {"id": str(n.get("id", nid)), "kind": str(n.get("kind", "")), "label": _label(n, project_root),
          "count": n.get("count") if isinstance(n.get("count"), int) else 1,
@@ -65,6 +67,12 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
     items = todos.get("items") if isinstance(todos, dict) else None
     next_steps = [{"content": _text(t.get("content")), "status": _text(t.get("status"))}
                   for t in items or [] if isinstance(t, dict)]
+    if not isinstance(tokens, dict):
+        tokens = {"available": False, "reason": "No Claude Code transcripts found for this project."}
+    tape = tokens.get("tape")
+    if not isinstance(tape, dict):
+        tape = {"available": False, "reason": str(tokens.get("reason") or "No session tape for this project.")}
+    tokens = {k: v for k, v in tokens.items() if k != "tape"}
     return {
         "project": str(project_name),
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -73,8 +81,8 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
         "sessions": sessions,
         "brief": {"last_request": meta_text("last_prompt"), "where": where,
                   "next_steps": next_steps},
-        "tokens": tokens if isinstance(tokens, dict) else {
-            "available": False, "reason": "No Claude Code transcripts found for this project."},
+        "tokens": tokens,
+        "tape": tape,
     }
 
 
