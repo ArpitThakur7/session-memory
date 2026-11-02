@@ -110,7 +110,8 @@ def graph_lock(path: Path, timeout: float | None = None):
     while True:
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # Windows: a delete-pending or briefly open lock file raises PermissionError
             try:
                 if time.time() - lock.stat().st_mtime > LOCK_STALE_SECONDS:
                     lock.unlink()
@@ -129,7 +130,14 @@ def graph_lock(path: Path, timeout: float | None = None):
     finally:
         try:
             if lock.read_text(encoding="utf-8") == token:
-                lock.unlink()
+                for attempt in range(5):
+                    try:
+                        lock.unlink()
+                        break
+                    except PermissionError:  # Windows: briefly held open by a scanner or reader
+                        if attempt == 4:
+                            raise
+                        time.sleep(0.02)
         except OSError:
             pass
 

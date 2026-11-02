@@ -17,7 +17,7 @@ from pathlib import Path
 
 from memgraph.graph import Graph, write_json_atomic
 from memgraph.guard import last_activity
-from memgraph.ingest import load_state
+from memgraph.ingest import load_state, pack_size
 from memgraph.pack import write_pack
 from memgraph.transcript import parse_ts
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
@@ -234,7 +234,9 @@ def _extend_for_activity(mem_dir: Path, deadline_text: str, dl: datetime) -> boo
     try:
         data = load_state(mem_dir / WATCH_FILE)
         transcript = data.get("transcript")
-        if data.get("deadline") != deadline_text or not isinstance(transcript, str) or not transcript:
+        if data.get("deadline") != deadline_text:
+            return True  # a Stop hook moved it meanwhile: keep watching, warn for the new one
+        if not isinstance(transcript, str) or not transcript:
             return False
         last, _context = last_activity(Path(transcript))
         if last is None:
@@ -261,7 +263,7 @@ def _log(mem_dir: Path) -> None:
 def _build_packs(mem_dir: Path, project: Path) -> None:
     try:
         graph = Graph.load(mem_dir / "graph.json")
-        write_pack(graph, mem_dir, "standard", project)
+        write_pack(graph, mem_dir, pack_size(mem_dir), project)
         target = mem_dir / IMAGE_FILE
         if has_story(graph):
             render_visual_pack(graph, target, project)

@@ -291,3 +291,51 @@ def test_update_gives_up_on_a_fresh_lock_and_replaces_a_stale_one(tmp_path):
     os.utime(lock, (old, old))  # its owner died 60 s ago
     update(path, lambda g: g.add_node("decision", "x", "x", ""), timeout=0.2)
     assert "decision:x" in Graph.load(path).nodes and not lock.exists()
+
+
+def test_lock_retries_on_permission_error_then_succeeds(tmp_path, monkeypatch):
+    from memgraph.graph import update
+
+    real, calls = os.open, []
+
+    def flaky(p, flags, *a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError(13, "delete pending")
+        return real(p, flags, *a, **k)
+
+    monkeypatch.setattr(os, "open", flaky)
+    path = tmp_path / "graph.json"
+    update(path, lambda g: g.add_node("decision", "x", "x", ""), timeout=2)
+    assert "decision:x" in Graph.load(path).nodes and len(calls) >= 2
+
+
+def test_lock_permission_error_forever_is_graph_busy(tmp_path, monkeypatch):
+    import pytest
+
+    from memgraph.graph import GraphBusy, update
+
+    def denied(*a, **k):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(os, "open", denied)
+    with pytest.raises(GraphBusy):
+        update(tmp_path / "graph.json", lambda g: None, timeout=0.1)
+
+
+def test_lock_release_retries_unlink_on_permission_error(tmp_path, monkeypatch):
+    from memgraph.graph import graph_lock
+
+    real, calls = Path.unlink, []
+
+    def flaky(self, *a, **k):
+        if self.suffix == ".lock":
+            calls.append(1)
+            if len(calls) <= 2:
+                raise PermissionError(13, "open elsewhere")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", flaky)
+    with graph_lock(tmp_path / "graph.json"):
+        pass
+    assert not (tmp_path / "graph.lock").exists() and len(calls) == 3

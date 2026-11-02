@@ -517,3 +517,10 @@ def test_stop_arms_watcher_then_session_start_points_at_fresh_packs(tmp_path, mo
     if (mem / "memory.png").exists():  # Pillow installed: the picture is as new as the pack
         assert "Visual summary: open .claude/session-memory/memory.png" in brief
     assert not (mem / "error.log").exists()
+
+
+def test_extend_for_activity_keeps_watching_when_deadline_moved(tmp_path):
+    project, mem = setup_mem(tmp_path)
+    old, new = T0 + timedelta(minutes=60), T0 + timedelta(minutes=120)
+    write_json_atomic(mem / "watch.json", {"deadline": new.isoformat(), "transcript": "x"})
+    assert watch._extend_for_activity(mem, old.isoformat(), old) is True

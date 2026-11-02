@@ -37,6 +37,29 @@ def save_state(path: Path, state: dict) -> None:
     write_json_atomic(path, state)
 
 
+def pack_size(mem_dir: Path) -> str:
+    """Size of the last resume pack built (state.json "pack_size"); "standard" if unknown."""
+    from memgraph.pack import SIZES
+
+    size = load_state(Path(mem_dir) / "state.json").get("pack_size")
+    return size if isinstance(size, str) and size in SIZES else "standard"
+
+
+def record_pack_size(mem_dir: Path, size: str) -> None:
+    """Remember the size just built, under graph.lock (state.json is shared with ingest)."""
+    from memgraph.graph import GraphBusy, graph_lock
+
+    path = Path(mem_dir) / "state.json"
+    try:
+        with graph_lock(Path(mem_dir) / "graph.json"):
+            state = load_state(path)
+            if state.get("pack_size") != size:
+                state["pack_size"] = size
+                save_state(path, state)
+    except GraphBusy:
+        pass
+
+
 def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
     """Apply events from new complete lines of every *.jsonl in `transcripts_dir`.
 

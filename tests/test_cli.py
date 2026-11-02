@@ -301,3 +301,15 @@ def test_pack_cli_never_writes_an_empty_pack(tmp_path, monkeypatch):   # I1
     out = run(["pack", "--no-visual"], "")
     assert out == "Resume pack skipped: nothing to pack yet\n"
     assert not (tmp_path / ".claude/session-memory/resume-pack.md").exists()
+
+
+def test_session_start_rebuilds_pack_at_last_size_built(tmp_path, monkeypatch):
+    payload = hook_input(tmp_path)
+    run(["hook-stop"], payload)
+    monkeypatch.chdir(tmp_path / "proj")
+    run(["pack", "--size", "deep", "--no-visual"], "")
+    sizes = []
+    real = __import__("memgraph.cli", fromlist=["write_pack"]).write_pack
+    monkeypatch.setattr("memgraph.cli.write_pack", lambda g, m, s, *a, **k: sizes.append(s) or real(g, m, s, *a, **k))
+    run(["hook-session-start"], payload)
+    assert sizes == ["deep"]

@@ -201,7 +201,7 @@ The live test needs an interactive Claude Code session and spends usage limit, s
 - [ ] After `/clear`, the new session's first answer knows the last request and the next steps.
 - [ ] With `SESSION_MEMORY_IDLE_MIN=0` and `SESSION_MEMORY_MIN_TOKENS=1000` set, sending a message is blocked by the guard; sending the same message again goes through.
 - [ ] With `SESSION_MEMORY_CACHE_TTL_MIN=4` set, a desktop notification appears about 2 minutes after a reply.
-- [ ] After `/clear`, the brief contains the "Full resume pack" line (and the "Visual summary" line when the picture is current), and `resume-pack.md` shows the latest request and a fresh "Built" time.
+- [ ] After `/clear`, the brief contains the "Full resume pack" line (and the "Visual summary" line when the picture is current), and `resume-pack.md` contains your latest request (the "Built" time stays the same when nothing changed).
 - [ ] After a reply, close Claude Code: the cache watcher still shows its notification.
 - [ ] In VS Code and in Antigravity, the session-memory server lists 4 tools: `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack`.
 
