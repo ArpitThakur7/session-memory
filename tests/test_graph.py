@@ -100,10 +100,24 @@ def test_prompt_meta_and_session_edge():
     assert g.meta["last_prompt"] == {"text": "hello", "ts": "t1", "session": "s"}
 
 
-def test_error_without_known_tool_links_session():
+def test_error_without_known_tool_is_not_recorded():
     g = Graph()
-    g.apply(Event("error", "t1", "s", {"text": "boom", "tool_use_id": "zzz"}))
-    assert any(e["rel"] == "failed" and e["src"] == "session:s" for e in g.edges.values())
+    g.apply(Event("error", "t1", "s", {"text": "Server x not found", "tool_use_id": "zzz"}))
+    g.apply(Event("error", "t1", "s", {"text": "no id"}))
+    assert not any(n["kind"] == "error" for n in g.nodes.values())
+    assert not any(e["rel"] == "failed" for e in g.edges.values())
+
+
+def test_error_of_read_edit_and_command_tools_is_recorded():
+    g = Graph()
+    g.apply(Event("read", "t1", "s", {"path": "a.py", "id": "r1"}))
+    g.apply(Event("edit", "t1", "s", {"path": "b.py", "id": "e1"}))
+    g.apply(Event("command", "t1", "s", {"cmd": "pytest", "id": "c1"}))
+    for tid in ("r1", "e1", "c1"):
+        g.apply(Event("error", "t2", "s", {"text": f"bad {tid}", "tool_use_id": tid}))
+    failed = {(e["src"], g.nodes[e["dst"]]["label"]) for e in g.edges.values() if e["rel"] == "failed"}
+    assert failed == {("file:a.py", "bad r1"), ("file:b.py", "bad e1"),
+                      (next(i for i in g.nodes if i.startswith("command:")), "bad c1")}
 
 
 def test_tool_nodes_capped_at_500_newest():

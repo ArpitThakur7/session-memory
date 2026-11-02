@@ -214,6 +214,8 @@ class Graph:
         sid = event.session or "unknown"
         data = event.data or {}
         stamp = ts or ""
+        if event.kind == "error" and data.get("tool_use_id") not in self.meta.get("tool_nodes", {}):
+            return  # only failures of edit/read/command tools are the project's own errors
 
         sess = self.meta.setdefault("sessions", {}).setdefault(sid, {})
         if ts:
@@ -257,7 +259,7 @@ class Graph:
         elif kind == "error":
             text = str(data.get("text") or "")
             node = self.add_node("error", _digest(text), text[:_MAX_LABEL], stamp)
-            src = self.meta.get("tool_nodes", {}).get(data.get("tool_use_id")) or session_node
+            src = self.meta["tool_nodes"][data["tool_use_id"]]
             self.add_edge(src, "failed", node, stamp)
         elif kind == "todo":
             items = [dict(t) for t in data.get("items") or [] if isinstance(t, dict)]

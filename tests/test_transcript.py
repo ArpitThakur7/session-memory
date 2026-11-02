@@ -116,6 +116,15 @@ def test_tool_rejections_are_not_errors():                             # I3
     assert [e.kind for e in parse_line(result("FAILED test_x"))] == ["error"]
 
 
+def test_harness_tool_use_errors_are_not_errors():
+    def result(text):
+        return _user([{"type": "tool_result", "tool_use_id": "t", "is_error": True, "content": text}])
+
+    assert parse_line(result("<tool_use_error>String to replace not found in file.</tool_use_error>")) == []
+    assert parse_line(result("  <tool_use_error>File has not been read yet</tool_use_error>")) == []
+    assert [e.kind for e in parse_line(result("Exit code 1: <tool_use_error> later"))] == ["error"]
+
+
 def test_session_titles():                                             # I3
     custom = parse_line(json.dumps({"type": "custom-title", "customTitle": "Login work", "sessionId": "s"}))
     ai = parse_line(json.dumps({"type": "ai-title", "aiTitle": "Fix the login", "sessionId": "s"}))

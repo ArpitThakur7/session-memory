@@ -9,6 +9,7 @@ from typing import Iterable
 _MAX_TEXT = 200
 _MAX_REPLY = 600
 _INTERRUPTED = "[Request interrupted by user"
+_HARNESS_ERROR = "<tool_use_error>"
 _TITLE_FIELDS = {"custom-title": ("customTitle", "custom"), "ai-title": ("aiTitle", "ai")}
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
@@ -104,8 +105,8 @@ def _parse_user(msg: dict, obj: dict, ts: str, session: str) -> list[Event]:
     for block in _blocks(content):
         if block.get("type") == "tool_result" and block.get("is_error") is True:
             text = _text_of(block.get("content"))
-            if _is_rejection(text):
-                continue
+            if _is_rejection(text) or text.lstrip().startswith(_HARNESS_ERROR):
+                continue  # declined by the user, or Claude misusing a tool: not project work
             events.append(
                 Event("error", ts, session, {"text": text[:_MAX_TEXT], "tool_use_id": block.get("tool_use_id")})
             )
