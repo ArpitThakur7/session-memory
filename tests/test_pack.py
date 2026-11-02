@@ -71,15 +71,28 @@ def test_where_uses_shared_session_rule():
     assert "Where things stand" not in pack.build_pack(g)
 
 
-def test_non_ascii_and_windows_paths_survive():
+def _graph_with_file(label):
     g = Graph()
-    g.meta["last_prompt"] = {"text": "fix café 日本語", "ts": "2026-11-01T10:00:00Z", "session": "s"}
-    t = g.add_node("task", "t", "fix café 日本語", "2026-11-01T10:00:00Z")
-    g.add_edge("session:s", "asked", t, "2026-11-01T10:00:00Z")
-    f = g.add_node("file", "C:/proj/src/ünï.py", "C:/proj/src/ünï.py", "2026-11-01T10:00:00Z")
-    g.add_edge(t, "edited", f, "2026-11-01T10:00:00Z")
-    out = pack.build_pack(g, "standard", Path("C:/proj"))
+    ts = "2026-11-01T10:00:00Z"
+    g.meta["last_prompt"] = {"text": "fix café 日本語", "ts": ts, "session": "s"}
+    t = g.add_node("task", "t", "fix café 日本語", ts)
+    g.add_edge("session:s", "asked", t, ts)
+    f = g.add_node("file", label, label, ts)
+    g.add_edge(t, "edited", f, ts)
+    return g
+
+
+def test_non_ascii_paths_survive(tmp_path):
+    root = tmp_path / "proj"
+    label = (root / "src" / "ünï.py").as_posix()
+    out = pack.build_pack(_graph_with_file(label), "standard", root)
     assert "café 日本語" in out and "- src/ünï.py" in out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="backslash drive paths are absolute only on Windows")
+def test_windows_backslash_paths_survive():
+    out = pack.build_pack(_graph_with_file("C:\proj\src\ünï.py"), "standard", Path("C:/proj"))
+    assert "- src/ünï.py" in out
 
 
 def test_write_pack_atomic(tmp_path):
