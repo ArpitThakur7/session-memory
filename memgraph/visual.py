@@ -17,6 +17,7 @@ from pathlib import Path
 from memgraph.brief import DATA_NOTE, _newest, _one_line
 from memgraph.graph import Graph
 from memgraph.pack import built_line
+from memgraph.transcript import clean_prompt, fmt_local
 
 IMAGE_SIZE = (1092, 1092)
 IMAGE_FILE = "memory.png"
@@ -32,6 +33,8 @@ _INK, _HEAD, _MUTED, _RED = (25, 25, 25), (20, 60, 130), (85, 85, 85), (185, 25,
 _MARGIN, _GAP, _BAR, _FOOT, _LINE = 24, 24, 52, 30, 16
 _INDENT = 12
 _MAX_DECISIONS = 6
+_MAX_STEPS = 10
+_BALANCE_WINDOW = 4  # lines a column split may move to land between blocks
 
 _QUOTED = re.compile(r"`[^`]{41,}`|\"[^\"]{41,}\"|(?<!\w)'[^']{41,}'")
 _URL = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9+.-]*)://(\S+)")
@@ -144,8 +147,10 @@ def has_story(graph: Graph) -> bool:
 
 
 # A line is (indent_px, [(text, style), ...]); style is ink, head, muted or red.
-def _lines(graph: Graph, font, col_w: int):
-    """Lazily yield lines: decisions first, then sessions newest first."""
+def _lines(graph: Graph, font, col_w: int, request_lines: int = 2):
+    """Lazily yield lines: decisions first, then sessions newest first.
+
+    A request takes up to `request_lines` lines; a None line is skipped."""
     first = True
     decisions = _newest([n for n in graph.nodes.values() if n.get("kind") == "decision"], _MAX_DECISIONS)
     if decisions:
@@ -161,7 +166,8 @@ def _lines(graph: Graph, font, col_w: int):
         for ln in _wrap(scrub(title), font, col_w, 1):
             yield 0, [(ln, "head")]
         for task, n_files, errors in tasks:
-            for i, ln in enumerate(_wrap(scrub(task.get("label", "")), font, col_w - _INDENT, 2)):
+            label = scrub(clean_prompt(task.get("label", "")))
+            for i, ln in enumerate(_wrap(label, font, col_w - _INDENT, request_lines)):
                 yield (0, [("\u2022 " + ln, "ink")]) if i == 0 else (_INDENT, [(ln, "ink")])
             yield _INDENT, _meta(font, col_w - _INDENT, n_files, errors) or None
         for er in s_errors:
@@ -185,12 +191,101 @@ def _meta(font, width: int, n_files: int, errors) -> list:
     return segs
 
 
+def _next_steps(graph: Graph, font, col_w: int) -> list[list]:
+    """Heading plus one item per open step of the latest plan (each item a list of lines)."""
+    last = graph.meta.get("last_todos") or {}
+    todos = [t for t in last.get("items") or [] if isinstance(t, dict) and t.get("status") != "completed"]
+    if not todos:
+        return []
+    stamp = fmt_local(last.get("ts"))
+    head = f"Next steps (as of {stamp})" if stamp else "Next steps"
+    items = [[(0, [(head, "head")])]]
+    for t in todos[:_MAX_STEPS]:
+        prefix = "now: " if t.get("status") == "in_progress" else ""
+        text = scrub(prefix + str(t.get("content") or ""))
+        items.append([(0, [("• " + ln, "ink")]) if i == 0 else (_INDENT, [(ln, "ink")])
+                      for i, ln in enumerate(_wrap(text, font, col_w - _INDENT, 2))])
+    return items
+
+
+def _files_touched(graph: Graph, font, col_w: int) -> list[list]:
+    """Heading plus lines of file names (never paths), most-touched first."""
+    files = sorted((n for n in graph.nodes.values() if n.get("kind") == "file"),
+                   key=lambda n: (str(n.get("last") or ""), str(n.get("label", ""))), reverse=True)
+    files.sort(key=lambda n: n.get("count") or 0, reverse=True)  # stable: newest first among equals
+    names: list[str] = []
+    for n in files:
+        name = re.split(r"[\\/]", scrub(n.get("label", "")).rstrip("\\/"))[-1]
+        if name and name not in names:
+            names.append(name)
+    if not names:
+        return []
+    items, cur, sep = [[(0, [("Files touched", "head")])]], "", " · "
+    for name in names:
+        name = _short(font, name, col_w)
+        if cur and font.getlength(cur + sep + name) > col_w:
+            items.append([(0, [(cur, "muted")])])
+            cur = name
+        else:
+            cur = f"{cur}{sep}{name}" if cur else name
+    items.append([(0, [(cur, "muted")])])
+    return items
+
+
+def _fit(items: list[list], room: int) -> list:
+    """A blank line, the heading and as many whole items as fit in `room` lines; [] if none fits."""
+    if len(items) < 2:
+        return []
+    out = [(0, [])] + items[0]
+    for item in items[1:]:
+        if len(out) + len(item) > room:
+            break
+        out += item
+    return out if len(out) > 1 + len(items[0]) else []
+
+
+def _columns(flow: list, cap: int) -> list[list]:
+    """Split the flow (at most 2*cap lines) into two columns, as even as possible.
+
+    Near the middle, the split prefers a blank line between blocks (dropped, so no
+    column starts blank), then a line that starts an item, so a wrapped item stays whole."""
+    n = len(flow)
+    mid = (n + 1) // 2
+    near = sorted((k for k in range(1, n) if abs(k - mid) <= _BALANCE_WINDOW), key=lambda k: abs(k - mid))
+    for k in near:
+        if not flow[k][1] and k <= cap and n - k - 1 <= cap:
+            return [flow[:k], flow[k + 1:]]
+    for k in near:
+        if flow[k][0] == 0 and k <= cap and n - k <= cap:
+            return [flow[:k], flow[k:]]
+    return [flow[:mid], flow[mid:]]
+
+
 def compose(graph: Graph, font, col_w: int, cap: int) -> dict:
-    """Everything drawn below the header: {"flow": lines, "footer": str}; flow is capped at 2*cap lines."""
-    flow = [(i, segs or []) for i, segs in islice(_lines(graph, font, col_w), 2 * cap + 1) if segs is not None]
-    if len(flow) > 2 * cap:
-        flow = flow[: 2 * cap - 1] + [(0, [(MORE, "muted")])]
-    return {"flow": flow, "footer": FOOTER}
+    """Everything drawn below the header: {"flow": lines, "columns": [left, right], "footer": str}.
+
+    The story fills at most 2*cap lines (cut with the MORE marker). Spare lines go,
+    in order, to the open next steps, the most-touched file names, and then to
+    letting each request use 4 lines instead of 2. The lines are then balanced
+    across both columns."""
+    limit = 2 * cap
+
+    def story(request_lines: int) -> list:
+        lines = (ln for ln in _lines(graph, font, col_w, request_lines) if ln[1] is not None)
+        return list(islice(lines, limit + 1))
+
+    flow = story(2)
+    if len(flow) > limit:
+        flow = flow[: limit - 1] + [(0, [(MORE, "muted")])]
+        return {"flow": flow, "columns": [flow[:cap], flow[cap:]], "footer": FOOTER}
+    extras: list = []
+    for items in (_next_steps(graph, font, col_w), _files_touched(graph, font, col_w)):
+        extras += _fit(items, limit - len(flow) - len(extras))
+    longer = story(4)
+    if len(longer) + len(extras) <= limit:
+        flow = longer
+    flow = flow + extras
+    return {"flow": flow, "columns": _columns(flow, cap), "footer": FOOTER}
 
 
 def render_visual_pack(graph: Graph, path: Path, project_root: Path | None = None) -> Path | None:
@@ -216,12 +311,13 @@ def render_visual_pack(graph: Graph, path: Path, project_root: Path | None = Non
     d.text((_MARGIN, 5), f"{scrub(name)} \u2014 session memory", font=bold, fill=_HEAD)
     d.text((_MARGIN, 5 + _LINE), f"{built_line()}   \u2248 1,590 image tokens   {DATA_NOTE}", font=body, fill=_MUTED)
     colors = {"ink": _INK, "head": _HEAD, "muted": _MUTED, "red": _RED}
-    for n, (indent, segs) in enumerate(page["flow"]):
-        col, row = divmod(n, cap)
-        x = _MARGIN + col * (col_w + _GAP) + indent
-        for text, style in segs:
-            d.text((x, _BAR + row * _LINE), text, font=bold if style == "head" else body, fill=colors[style])
-            x += body.getlength(text)
+    for col, lines in enumerate(page["columns"]):
+        for row, (indent, segs) in enumerate(lines):
+            x = _MARGIN + col * (col_w + _GAP) + indent
+            for text, style in segs:
+                font = bold if style == "head" else body
+                d.text((x, _BAR + row * _LINE), text, font=font, fill=colors[style])
+                x += font.getlength(text)
     d.line([w // 2, _BAR, w // 2, _BAR + cap * _LINE], fill=(220, 220, 220))
     d.text((_MARGIN, h - _FOOT + 6), page["footer"], font=body, fill=_MUTED)
 

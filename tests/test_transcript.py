@@ -160,3 +160,32 @@ def test_sidechain_lines_keep_only_edit_read_command_error():
     from tests.helpers import SUBAGENT_FIXTURE
     kinds = [e.kind for e in parse_lines(SUBAGENT_FIXTURE.read_text(encoding="utf-8").splitlines())]
     assert kinds == ["read", "edit", "command", "error"]
+
+
+def _prompts(content):
+    return [e.data["text"] for e in parse_line(_user(content)) if e.kind == "prompt"]
+
+
+def test_pasted_content_only_prompt_becomes_pasted_preview():
+    inner = "line one of the paste\n" + "x" * 300
+    assert _prompts(f'<pasted_content id="a331">\n{inner}\n</pasted_content>') == \
+        ["[pasted] " + " ".join(inner.split())[:100]]
+    assert _prompts([{"type": "text", "text": '<pasted_content id="a1">short paste</pasted_content>'}]) == \
+        ["[pasted] short paste"]
+
+
+def test_system_reminders_and_leftover_tags_are_stripped_from_prompts():
+    assert _prompts("<system-reminder>context here</system-reminder>\nFix the login bug") == ["Fix the login bug"]
+    assert _prompts("Fix it <system-reminder>secret\nstuff</system-reminder> now") == ["Fix it  now"]
+    assert _prompts('Review <pasted_content id="b2">long text</pasted_content> please') == ["Review [pasted] please"]
+    assert _prompts('Use <user_note kind="x">the cache</user_note> layer') == ["Use the cache layer"]
+    assert _prompts("Keep List<String> and a < b > c") == ["Keep List<String> and a < b > c"]
+    assert _prompts("<system-reminder>only a reminder</system-reminder>") == []
+    assert _prompts("<command-name>/clear</command-name>") == []
+
+
+def test_clean_prompt_handles_cut_off_markup():
+    from memgraph.transcript import clean_prompt
+    assert clean_prompt('<pasted_content id="z">abc def') == "[pasted] abc def"
+    assert clean_prompt("Do it <system-reminder>never closed") == "Do it"
+    assert clean_prompt("[pasted] already clean") == "[pasted] already clean"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
@@ -73,6 +74,27 @@ def _text_of(content) -> str:
     return ""
 
 
+_SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?(?:</system-reminder>|\Z)", re.S)
+_PASTED = re.compile(r"<pasted_content\b[^>]*>(.*?)(?:</pasted_content>|\Z)", re.S)
+# Wrapper tags: a lowercase name with "_" or "-" (pasted_content, system-reminder, ...),
+# or any lowercase tag with attributes. Plain text like List<String> or a < b is kept.
+_TAG = re.compile(r"</?[a-z][a-z0-9]*[_-][a-z0-9_-]*(?:\s[^<>]*)?/?>|<[a-z][a-z0-9_-]*\s[^<>]*=[^<>]*>")
+_PASTED_PREVIEW = 100
+
+
+def clean_prompt(text) -> str:
+    """Prompt text without markup: system reminders and wrapper tags removed, a prompt
+    that is only pasted content shown as "[pasted] " + the start of the paste, and
+    pasted content inside other text as "[pasted]". Cut-off markup is handled too."""
+    text = _SYSTEM_REMINDER.sub("", str(text or ""))
+    pasted = list(_PASTED.finditer(text))
+    if pasted and not _PASTED.sub("", text).strip():
+        inner = " ".join(_TAG.sub("", " ".join(m.group(1) for m in pasted)).split())
+        return f"[pasted] {inner[:_PASTED_PREVIEW]}".rstrip()
+    text = _PASTED.sub("[pasted]", text)
+    return _TAG.sub("", text).strip()
+
+
 def _blocks(content) -> list[dict]:
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
@@ -123,9 +145,13 @@ def _parse_user(msg: dict, obj: dict, ts: str, session: str) -> list[Event]:
     events: list[Event] = []
     content = msg.get("content")
     if obj.get("isMeta") is not True and obj.get("isCompactSummary") is not True:
-        text = _text_of(content)
-        if text and not text.startswith("<") and not text.startswith(_INTERRUPTED):
-            events.append(Event("prompt", ts, session, {"text": text[:_MAX_TEXT]}))
+        raw = _SYSTEM_REMINDER.sub("", _text_of(content)).strip()
+        # Other leading markup (<command-name>, <local-command-stdout>, ...) is not a request.
+        if raw and (not raw.startswith("<") or raw.startswith("<pasted_content")) \
+                and not raw.startswith(_INTERRUPTED):
+            text = clean_prompt(raw)
+            if text:
+                events.append(Event("prompt", ts, session, {"text": text[:_MAX_TEXT]}))
     for block in _blocks(content):
         if block.get("type") == "tool_result" and block.get("is_error") is True:
             text = _text_of(block.get("content"))

@@ -283,3 +283,16 @@ def test_local_time_helper_defaults_to_machine_zone(monkeypatch):
     assert transcript.local_time(ts) == datetime(2026, 7, 1, 10, tzinfo=timezone.utc).astimezone()
     assert transcript.fmt_local(ts) == datetime(2026, 7, 1, 10, tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     assert transcript.fmt_local("nonsense") == "" and transcript.local_time(None) is None
+
+
+def test_markup_from_older_graphs_is_cleaned_in_brief_and_pack():
+    from memgraph.pack import build_pack
+    g = graph_from_fixture()
+    g.meta["last_prompt"]["text"] = '<pasted_content id="a331">some pasted words'
+    g.meta["recent_prompts"].append({"text": "<system-reminder>x</system-reminder>Older ask", "ts": "2026-10-01T00:00:00Z", "session": "s1"})
+    task = g.add_node("task", "zz", '<user_note kind="x">tagged</user_note> request', "2026-11-01T09:00:00Z")
+    g.add_edge("session:s1", "asked", task, "2026-11-01T09:00:00Z")
+    for out in (build_brief(g), build_pack(g, "standard")):
+        assert "[pasted] some pasted words" in out and "<pasted_content" not in out
+    assert "- Older ask" in build_brief(g) and "<system-reminder" not in build_brief(g)
+    assert "tagged request" in build_pack(g, "standard") and "<user_note" not in build_pack(g, "standard")

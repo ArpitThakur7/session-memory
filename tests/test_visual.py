@@ -141,7 +141,7 @@ def test_decisions_come_first():
     assert page(g)["flow"][0][1][0][0] == "Decisions"
 
 
-def test_meta_is_one_line_and_requests_capped_at_two_lines():
+def _long_request_graph():
     g = Graph()
     t = g.add_node("task", "t", "word " * 200, TS)
     g.add_edge("session:s1", "asked", t, TS)
@@ -149,8 +149,75 @@ def test_meta_is_one_line_and_requests_capped_at_two_lines():
     g.add_edge(t, "edited", f, TS)
     e = g.add_node("error", "e", "oops", TS)
     g.add_edge(t, "failed", e, TS)
-    lines = text_of(page(g)["flow"]).splitlines()
+    return g
+
+
+def test_meta_is_one_line_and_requests_use_four_lines_when_space_remains():
+    lines = text_of(page(_long_request_graph())["flow"]).splitlines()
+    assert not lines[2].endswith("\u2026") and lines[4].endswith("\u2026")
+    assert lines[5] == "changed 1 file \u00b7 failed: oops"
+
+
+def test_requests_stay_at_two_lines_when_space_is_short():
+    lines = text_of(page(_long_request_graph(), cap=4)["flow"]).splitlines()
     assert lines[2].endswith("\u2026") and lines[3] == "changed 1 file \u00b7 failed: oops"
+
+
+def test_short_story_is_balanced_across_both_columns():
+    p = page(graph_from_fixture())
+    left, right = p["columns"]
+    assert left and right and abs(len(left) - len(right)) <= 3
+    assert left[0][1] != [] and right[0][1] != []          # no blank line at the top of a column
+    assert [ln for ln in p["flow"] if ln[1]] == [ln for ln in left + right if ln[1]]
+
+
+def test_overflowing_story_fills_both_columns_to_the_cap():
+    p = page(big_graph(2000), cap=20)
+    assert [len(c) for c in p["columns"]] == [20, 20]
+    assert text_of(p["columns"][1]).endswith(visual.MORE)
+
+
+def test_next_steps_and_files_touched_fill_spare_space():
+    g = graph_from_fixture()
+    for _ in range(3):
+        g.add_node("file", "C:/Users/me/proj/src/busy.py", "C:/Users/me/proj/src/busy.py", TS)
+    text = text_of(page(g)["flow"])
+    assert "Next steps" in text and "Fix login test" in text and "Add logout" in text
+    assert "Create login form" not in text                       # completed
+    assert text.index("Next steps") < text.index("Files touched")
+    files = text[text.index("Files touched"):]
+    assert files.index("busy.py") < files.index("login.py") and "C:/Users" not in text and "src/" not in files
+
+
+def _story_len(g):
+    flow = page(g)["flow"]
+    heads = [i for i, (_ind, segs) in enumerate(flow) if segs and segs[0][0].startswith("Next steps")]
+    return heads[0] - 1   # the blank line before the heading ends the story
+
+
+def test_extras_need_space_and_keep_priority_order():
+    g = graph_from_fixture()
+    n = _story_len(g)
+    none = text_of(page(g, cap=(n + 1) // 2)["flow"])
+    assert "Next steps" not in none and "Files touched" not in none
+    some = text_of(page(g, cap=(n + 4) // 2)["flow"])                # blank + heading + one step
+    assert "Next steps" in some and "Fix login test" in some and "Files touched" not in some
+
+
+def test_next_steps_heading_uses_local_time(monkeypatch):
+    from datetime import timedelta, timezone
+
+    from memgraph import transcript
+    monkeypatch.setattr(transcript, "_LOCAL_TZ", timezone(timedelta(hours=5, minutes=30)))
+    assert "Next steps (as of 2026-11-01 15:30)" in text_of(page(graph_from_fixture())["flow"])
+
+
+def test_story_labels_drop_markup_from_older_graphs():
+    g = Graph()
+    t = g.add_node("task", "t", '<pasted_content id="a331">pasted body text', TS)
+    g.add_edge("session:s1", "asked", t, TS)
+    text = text_of(page(g)["flow"])
+    assert "[pasted] pasted body text" in text and "<pasted_content" not in text
 
 
 def test_scrub_urls_show_host_only_and_plain_text_is_untouched():

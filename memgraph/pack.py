@@ -9,7 +9,7 @@ from pathlib import Path
 from memgraph.brief import (DATA_NOTE, _changed_files, _fmt_ts, _newest, _one_line, _request_line,
                             where_things_stand)
 from memgraph.graph import Graph
-from memgraph.transcript import fmt_local, local_time
+from memgraph.transcript import clean_prompt, fmt_local, local_time
 
 SIZES = {"tiny": 2000, "standard": 8000, "deep": 24000}
 PACK_FILE = "resume-pack.md"
@@ -51,7 +51,7 @@ def _timeline(graph: Graph, with_commands: bool) -> list[str]:
         lines.append(f"### {date} {_clip(meta.get('title') or sid)}".replace("###  ", "### "))
         for task in sorted(asked[sid], key=lambda n: (n.get("first") or "", str(n.get("label", "")))):
             hhmm = _time(task.get("first"))[1]
-            lines.append(f"- {hhmm} {_clip(task.get('label', ''))}".replace("-  ", "- "))
+            lines.append(f"- {hhmm} {_clip(clean_prompt(task.get('label', '')))}".replace("-  ", "- "))
             if with_commands:
                 for cmd in _newest(ran.get(task.get("id"), []), 5):
                     lines.append(f"  - ran: {_clip(cmd.get('label', ''))}")
@@ -101,7 +101,7 @@ def build_pack(graph: Graph, size: str = "standard", project_root: Path | None =
         sid = last_prompt.get("session")
         title = ((graph.meta.get("sessions") or {}).get(sid) or {}).get("title")
         session_title = _one_line(title) if title else None
-        request_text = _one_line(last_prompt.get("text", ""))
+        request_text = _one_line(clean_prompt(last_prompt.get("text", "")))
 
     name = project_root.name if project_root is not None and project_root.name else "project"
     built = built_line(now)
