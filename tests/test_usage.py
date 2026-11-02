@@ -125,3 +125,13 @@ def test_transcripts_dir_from_state_or_slug(tmp_path, monkeypatch):
     assert got == tmp_path / "home" / ".claude" / "projects" / slug
     (mem / "state.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "t")}), encoding="utf-8")
     assert usage.transcripts_dir_for(project, mem) == tmp_path / "t"
+
+
+def test_project_slug_is_ascii_only():
+    from pathlib import PureWindowsPath
+
+    class FakePath(PureWindowsPath):
+        def resolve(self):
+            return self
+
+    assert usage.project_slug(FakePath(r"C:\Users\José\proj_é")) == "C--Users-Jos--proj--"

@@ -13,7 +13,7 @@ def test_append_and_read_events_tolerate_partial_lines(tmp_path):
         fh.write('{"type": "fresh_st')  # a write cut off half way
     append_event(tmp_path, {"type": "fresh_start", "session": "b"})
     events = read_events(tmp_path)
-    assert [e["type"] for e in events] == ["guard_block"]  # the cut line swallows the next, never raises
+    assert [e["type"] for e in events] == ["guard_block", "fresh_start"]  # a torn line never swallows the next
     assert all("t" in e for e in events)
     assert read_events(tmp_path / "missing") == []
 
@@ -22,7 +22,7 @@ def test_append_event_is_one_line_each(tmp_path):
     for i in range(3):
         append_event(tmp_path, {"type": "guard_block", "session": str(i), "context": i})
     text = (tmp_path / EVENTS_FILE).read_text(encoding="utf-8")
-    assert text.count("\n") == 3 and len(read_events(tmp_path)) == 3
+    assert len([x for x in text.split("\n") if x.strip()]) == 3 and len(read_events(tmp_path)) == 3
 
 
 def _write(path, lines):
@@ -54,7 +54,7 @@ def seed(tmp_path):
     ])
     mem = tmp_path / "mem"
     mem.mkdir()
-    append_event(mem, {"type": "fresh_start", "session": "new", "brief_chars": 4000,
+    append_event(mem, {"t": "2026-11-01T11:30:00+00:00", "type": "fresh_start", "session": "new", "brief_chars": 4000,
                        "prev_session": "old", "prev_context": 120003})
     append_event(mem, {"type": "fresh_start", "session": "ghost", "brief_chars": 4000,
                        "prev_session": "old", "prev_context": None})
@@ -70,8 +70,15 @@ def test_measure_savings_fresh_starts_are_measured(tmp_path):
     assert row["actual"] == 4 + 6000 + 14000
     assert row["saved"] == 120003 - 20004
     assert res["totals"]["measured_saved_tokens"] == 120003 - 20004
-    # priced as a cache rebuild of the avoided tokens: 1.25 x $4 per million
-    assert res["totals"]["measured_saved_usd"] == pytest.approx((120003 - 20004) * 5.0 / 1e6)
+    # old chat's last reply 11:01, fresh start 11:30, ttl 60: its cache was warm, so a resume
+    # would have read 120003 cached tokens at $0.20/M; the new chat's first reply cost
+    # 4*4 + 6000*5 + 14000*0.2 + 70*20 = 34216 per million. The dollar saving is negative.
+    assert row["cache_state"] == "warm"
+    assert row["would_have_usd"] == pytest.approx(120003 * 0.20 / 1e6)
+    assert row["actual_usd"] == pytest.approx(34216 / 1e6)
+    assert row["saved_usd"] == pytest.approx((120003 * 0.20 - 34216) / 1e6)
+    assert res["totals"]["measured_saved_usd"] == pytest.approx((120003 * 0.20 - 34216) / 1e6)
+    assert res["totals"]["fresh_starts_warm"] == 1 and res["totals"]["fresh_starts_cold"] == 0
     assert res["totals"]["fresh_starts"] == 1 and res["totals"]["guard_blocks"] == 1
 
 
@@ -113,3 +120,30 @@ def test_format_savings_keeps_measured_and_estimate_apart(tmp_path):
     assert "prices as of 2026-10-06" in text
     assert text.index("Measured") < text.index("estimate")
     json.dumps(measure_savings(t, mem, 60))  # JSON-able
+
+
+def test_fresh_start_after_ttl_is_cold_and_uses_old_chats_write_split(tmp_path):
+    t, mem = seed(tmp_path)
+    (row,) = measure_savings(t, mem, ttl_minutes=10)["fresh_starts"]
+    assert row["cache_state"] == "cold"
+    # the old chat's last reply wrote its cache with a 1-hour TTL: 2 x $4 per million
+    assert row["would_have_usd"] == pytest.approx(120003 * 8.0 / 1e6)
+    assert row["saved_usd"] == pytest.approx((120003 * 8.0 - 34216) / 1e6)
+
+
+def test_fresh_start_without_old_replies_is_unknown(tmp_path):
+    t, mem = seed(tmp_path)
+    os.remove(mem / EVENTS_FILE)
+    append_event(mem, {"t": "2026-11-01T11:30:00+00:00", "type": "fresh_start", "session": "new",
+                       "brief_chars": 10, "prev_session": "gone", "prev_context": 50000})
+    res = measure_savings(t, mem, 60)
+    (row,) = res["fresh_starts"]
+    assert row["cache_state"] == "unknown" and row["saved_usd"] is None and row["saved"] == 50000 - 20004
+    assert res["totals"]["fresh_starts_unknown"] == 1
+
+
+def test_format_savings_shows_cache_state_and_negative_dollars(tmp_path):
+    t, mem = seed(tmp_path)
+    text = format_savings(measure_savings(t, mem, 60))
+    assert "| warm |" in text and "-$0.01" in text
+    assert "saved (priced at old chat's cache state)" in text

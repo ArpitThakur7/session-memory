@@ -17,16 +17,18 @@ from pathlib import Path
 
 from memgraph.transcript import fmt_local, parse_ts
 from memgraph.usage import (PRICES_AS_OF, WRITE_1H_FACTOR, WRITE_5M_FACTOR, WRITE_UNKNOWN_FACTOR,
-                            Reply, UsageResult, collect_usage, price_for)
+                            Reply, UsageResult, collect_usage, price_for, reply_cost)
 
 EVENTS_FILE = "events.jsonl"
 DEFAULT_BRIEF_TOKENS = 500  # estimate when no brief size was ever recorded
 
 
 def append_event(mem_dir: Path, event: dict) -> None:
-    """Append one JSON line to events.jsonl with a single O_APPEND write (no lock needed)."""
+    """Append one JSON line to events.jsonl with a single O_APPEND write (no lock needed).
+
+    The record starts with a newline too, so a torn earlier write cannot swallow it."""
     obj = {"t": datetime.now(timezone.utc).isoformat(timespec="seconds"), **event}
-    data = (json.dumps(obj, ensure_ascii=True) + "\n").encode("ascii")
+    data = ("\n" + json.dumps(obj, ensure_ascii=True) + "\n").encode("ascii")
     fd = os.open(Path(mem_dir) / EVENTS_FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
     try:
         os.write(fd, data)
@@ -51,9 +53,21 @@ def read_events(mem_dir: Path) -> list[dict]:
     return out
 
 
-def _write_usd(model: str, tokens: float, factor: float) -> float | None:
-    p = price_for(model)
-    return None if p is None else tokens * p["input"] * factor / 1e6
+def _resume_usd(last: Reply | None, tokens: int, event_ts: datetime | None, ttl_minutes: int):
+    """(cache state, dollars) of re-reading `tokens` in the old chat instead of starting fresh.
+
+    Cold (more than ttl minutes after its last reply): a cache write at the old model's
+    price, with the TTL split of that last reply's writes (none: 1.25 x input).
+    Warm: a cache read at the old model's price. Unknown when either time is missing."""
+    if last is None or event_ts is None:
+        return "unknown", None
+    p = price_for(last.model)
+    if event_ts - last.ts > timedelta(minutes=ttl_minutes):
+        writes = last.cache_write
+        factor = ((last.cache_write_5m * WRITE_5M_FACTOR + last.cache_write_1h * WRITE_1H_FACTOR
+                   + last.cache_write_unknown * WRITE_UNKNOWN_FACTOR) / writes) if writes else WRITE_UNKNOWN_FACTOR
+        return "cold", None if p is None else tokens * p["input"] * factor / 1e6
+    return "warm", None if p is None else tokens * p["cache_read"] / 1e6
 
 
 def _rebuild_usd(reply: Reply) -> float | None:
@@ -72,8 +86,10 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
                     usage: UsageResult | None = None) -> dict:
     """Measured fresh-start savings and estimated missed savings from cold restarts.
 
-    Dollar values use PRICES_AS_OF prices of the reply's model; a saved or rebuilt
-    token is priced as a cache write (what re-sending it to a cold cache costs)."""
+    Dollar values use PRICES_AS_OF prices. A fresh start's saving is what resuming the
+    old chat would have cost (cache read if its cache was still warm, cache write if
+    cold) minus the new chat's first reply; it can be negative. Rebuilds are priced
+    as the reply's cache writes."""
     usage = usage if usage is not None else collect_usage(transcripts_dir)
     events = read_events(mem_dir)
     first_reply: dict[str, Reply] = {}
@@ -100,9 +116,16 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
             pending += 1  # the new chat has no reply yet
             continue
         saved = max(0, prev_context - reply.context)
-        fresh.append({"t": ev.get("t"), "session": sid, "prev_session": ev.get("prev_session"),
+        event_ts = parse_ts(ev.get("t"))
+        prev_sid = ev.get("prev_session")
+        older = [r for r in by_session.get(prev_sid, []) if event_ts is None or r.ts <= event_ts] \
+            if isinstance(prev_sid, str) else []
+        state, would = _resume_usd(older[-1] if older else None, prev_context, event_ts, ttl_minutes)
+        actual_usd = reply_cost(reply)
+        fresh.append({"t": ev.get("t"), "session": sid, "prev_session": prev_sid,
                       "prev_context": prev_context, "actual": reply.context, "saved": saved,
-                      "saved_usd": _write_usd(reply.model, saved, WRITE_5M_FACTOR)})
+                      "cache_state": state, "would_have_usd": would, "actual_usd": actual_usd,
+                      "saved_usd": None if would is None or actual_usd is None else would - actual_usd})
 
     estimate = brief_chars // 4 if brief_chars is not None else DEFAULT_BRIEF_TOKENS
     cold = []
@@ -130,6 +153,7 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
         "missed_estimate_usd": usd_sum(cold, "could_have_saved_estimate_usd"),
         "fresh_starts": len(fresh),
         "fresh_starts_pending": pending,
+        **{f"fresh_starts_{s}": sum(1 for r in fresh if r["cache_state"] == s) for s in ("cold", "warm", "unknown")},
         "cold_restarts": len(cold),
         "guard_blocks": sum(1 for e in events if e.get("type") == "guard_block"),
     }
@@ -138,13 +162,20 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
 
 
 def _usd(value: float | None) -> str:
-    return "—" if value is None else f"${value:,.2f}"
+    if value is None:
+        return "—"
+    return f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}"
+
+
+SAVED_USD_LABEL = "saved (priced at old chat's cache state)"
 
 
 def savings_totals_line(res: dict) -> str:
     t = res["totals"]
-    return (f"Measured saved: {t['measured_saved_tokens']:,} tokens ({_usd(t['measured_saved_usd'])}) "
-            f"over {t['fresh_starts']} fresh starts · Missed (estimate): {t['missed_estimate_tokens']:,} tokens "
+    return (f"Measured saved: {t['measured_saved_tokens']:,} tokens ({SAVED_USD_LABEL}: "
+            f"{_usd(t['measured_saved_usd'])}) over {t['fresh_starts']} fresh starts "
+            f"({t.get('fresh_starts_cold', 0)} cold, {t.get('fresh_starts_warm', 0)} warm, "
+            f"{t.get('fresh_starts_unknown', 0)} unknown) · Missed (estimate): {t['missed_estimate_tokens']:,} tokens "
             f"({_usd(t['missed_estimate_usd'])}) over {t['cold_restarts']} cold restarts · "
             f"guard blocks {t['guard_blocks']} (prices as of {res['prices_as_of']})")
 
@@ -152,10 +183,11 @@ def savings_totals_line(res: dict) -> str:
 def format_savings(res: dict) -> str:
     out = ["Measured savings (fresh starts with a brief; both sizes read from transcripts)"]
     if res["fresh_starts"]:
-        out += ["| time | old chat context | new chat first reply | saved | saved $ |", "|---|---:|---:|---:|---:|"]
+        out += [f"| time | old chat cache | old chat context | new chat first reply | saved | {SAVED_USD_LABEL} |",
+                "|---|---|---:|---:|---:|---:|"]
         for r in res["fresh_starts"]:
-            out.append(f"| {fmt_local(r['t'])} | {r['prev_context']:,} | {r['actual']:,} | {r['saved']:,} | "
-                       f"{_usd(r['saved_usd'])} |")
+            out.append(f"| {fmt_local(r['t'])} | {r['cache_state']} | {r['prev_context']:,} | {r['actual']:,} | "
+                       f"{r['saved']:,} | {_usd(r['saved_usd'])} |")
     else:
         out.append("No fresh starts recorded yet (they are logged from now on).")
     if res["totals"].get("fresh_starts_pending"):
@@ -172,7 +204,9 @@ def format_savings(res: dict) -> str:
     else:
         out.append("No cold restarts found.")
     out += ["", savings_totals_line(res),
-            "Dollars price saved or rebuilt tokens as cache writes of the reply's model."]
+            "Fresh-start dollars: what resuming the old chat would have cost (a cache read when its cache was "
+            "warm, a cache write when cold, at the old chat's model price) minus the new chat's first reply. "
+            "Rebuild dollars: the reply's cache writes."]
     return "\n".join(out)
 
 

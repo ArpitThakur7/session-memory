@@ -235,8 +235,9 @@ def totals(replies: list[Reply]) -> dict:
 
 
 def project_slug(project: Path) -> str:
-    """Claude Code's folder name for a project: the absolute path, every non-alphanumeric char -> "-"."""
-    return "".join(c if c.isalnum() else "-" for c in str(Path(project).resolve()))
+    """Claude Code's folder name for a project: the absolute path, every char that is not
+    an ASCII letter or digit -> "-"."""
+    return "".join(c if c.isascii() and c.isalnum() else "-" for c in str(Path(project).resolve()))
 
 
 def transcripts_dir_for(project: Path, mem_dir: Path | None) -> Path:

@@ -1721,7 +1721,8 @@ const DATA = /*__MEMORY_DATA__*/null;
     const wrap = el('div', 'tok');
     body.append(wrap);
     const num = (v) => (typeof v === 'number' && isFinite(v) ? v : 0);
-    const usd = (v, partial) => (typeof v === 'number' && isFinite(v) ? '$' + v.toFixed(2) + (partial ? ' (partial)' : '') : '—');
+    const usd = (v, partial) => (typeof v === 'number' && isFinite(v)
+      ? (v < 0 ? '-$' + (-v).toFixed(2) : '$' + v.toFixed(2)) + (partial ? ' (partial)' : '') : '—');
     const sumOf = (r) => num(r.input) + num(r.cache_write) + num(r.cache_read) + num(r.output);
     if (!T.available) {
       sub.textContent = '';
@@ -1806,18 +1807,30 @@ const DATA = /*__MEMORY_DATA__*/null;
 
     const s = (T.savings && T.savings.totals) || {};
     const box = el('div');
-    box.append(el('div', 'k', 'Savings'));
+    box.append(el('div', 'k', 'Savings · all time'));
     const saved = el('div', 'tok-line');
     const d1 = el('span', 'dot');
     d1.style.background = '#1D9E75';
     saved.append(d1, el('span', 'txt', 'Measured saved'), el('span', 'meta', fmtTokens(num(s.measured_saved_tokens)) + ' · ' + usd(s.measured_saved_usd)));
-    saved.title = num(s.fresh_starts) + ' fresh starts: old chat context minus the new chat’s first reply, both from transcripts';
+    saved.title = num(s.fresh_starts) + ' fresh starts (' + num(s.fresh_starts_cold) + ' cold, ' + num(s.fresh_starts_warm)
+      + ' warm, ' + num(s.fresh_starts_unknown) + ' unknown): old chat context minus the new chat’s first reply, both from transcripts.'
+      + ' Dollars: saved (priced at old chat’s cache state)';
     const missed = el('div', 'tok-line');
     const d2 = el('span', 'dot');
     d2.style.background = '#D85A30';
     missed.append(d2, el('span', 'txt', 'Missed (estimate)'), el('span', 'meta', fmtTokens(num(s.missed_estimate_tokens)) + ' · ' + usd(s.missed_estimate_usd)));
     missed.title = num(s.cold_restarts) + ' cold restarts: measured cache rebuilds minus an estimated brief size';
     box.append(saved, missed);
+    const starts = (T.savings && Array.isArray(T.savings.fresh_starts)) ? T.savings.fresh_starts.slice(-5).reverse() : [];
+    for (const r of starts) {
+      const line = el('div', 'tok-line');
+      const state = String(r.cache_state || 'unknown');
+      line.append(el('span', 'txt', fmtDate(r.t) + ' · old chat ' + state),
+        el('span', 'meta', fmtTokens(num(r.saved)) + ' · ' + usd(r.saved_usd)));
+      line.title = 'Fresh start: old chat ' + num(r.prev_context).toLocaleString() + ' tokens (cache ' + state
+        + '), new chat first reply ' + num(r.actual).toLocaleString() + ' tokens';
+      box.append(line);
+    }
     wrap.append(box);
     wrap.append(el('div', 'tok-note', 'Exact counts from this project’s transcripts. Dollars at prices as of ' + asOf
       + '. Cache writes without a TTL are priced as 5-minute writes. Missed savings are an estimate.'));

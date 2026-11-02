@@ -149,5 +149,8 @@ def test_view_data_tokens_from_transcripts(tmp_path):
     assert {m["key"] for m in tokens["models"]} == {"claude-opus-5-5"}
     assert {w["key"] for w in tokens["who"]} == {"main", "helper"}
     assert tokens["savings"]["totals"]["measured_saved_tokens"] == 120003 - 20004
+    assert tokens["savings"]["fresh_starts"][0]["cache_state"] in ("warm", "cold")
+    html_t = render_map(graph_from_fixture(), "p")
+    assert "all time" in html_t and "cache_state" in html_t
     html = render_map(graph_from_fixture(), "p", tokens=tokens)
     assert embedded_data(html)["tokens"]["totals"]["replies"] == 7
