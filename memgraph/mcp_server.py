@@ -87,7 +87,7 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
     graph_path = mem / "graph.json"
     graph = Graph.load(graph_path)  # re-read every call: the Stop hook keeps updating it
     if name == "memory_brief":
-        return [_text(build_brief(graph, project_root=project) or "No project memory yet.")]
+        return [_text(build_brief(graph, project_root=project, mem_dir=mem) or "No project memory yet.")]
     if name == "memory_recall":
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():

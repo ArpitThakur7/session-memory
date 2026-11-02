@@ -44,10 +44,18 @@ The page is one self-contained file, `.claude/session-memory/memory-map.html`. I
 
 The brief is small on purpose. A resume pack is a bigger summary that you ask for when you need more. It is made from the same memory graph and costs 0 model tokens to build.
 
-Run this inside your project folder. Use the real folder where you keep this plugin (for example `C:\Users\you\Desktop\session-memory`):
+Run this inside your project folder. Use the real folder where you keep this plugin (for example `C:\Users\you\Desktop\session-memory`).
+
+Windows (PowerShell or cmd):
 
 ```
-C:\Users\you\Desktop\session-memory\bin\run-python pack --size standard
+C:\Users\you\Desktop\session-memory\bin\run-python.cmd pack --size standard
+```
+
+macOS, Linux or Git Bash:
+
+```
+/path/to/session-memory/bin/run-python pack --size standard
 ```
 
 - `--size tiny` is about 2,000 characters. `standard` (the default) is about 8,000. `deep` is about 24,000.
@@ -55,18 +63,18 @@ C:\Users\you\Desktop\session-memory\bin\run-python pack --size standard
 - It also draws `.claude/session-memory/memory.png`, a 1092 x 1092 picture of the same story (about 1,590 image tokens). This needs the Pillow package (`pip install pillow`). Without Pillow the picture is skipped and the text pack still works. Add `--no-visual` to skip the picture.
 - When these files exist, the brief adds one line for each, so Claude knows where to look.
 
-To compare the sizes on your own transcripts:
+To compare the sizes on your own transcripts, use the full path to the plugin. You can run this from any folder:
 
 ```
-python bench/compare_packs.py "C:\Users\you\.claude\projects\your-project-folder"
-python bench/compare_packs.py "C:\Users\you\.claude\projects\your-project-folder" --questions
+python C:\Users\you\Desktop\session-memory\bench\compare_packs.py "C:\Users\you\.claude\projects\your-project-folder"
+python C:\Users\you\Desktop\session-memory\bench\compare_packs.py "C:\Users\you\.claude\projects\your-project-folder" --questions
 ```
 
 Use your real user name and project folder. Do not type angle brackets. The first command prints a table: history tokens, then tiny, standard and deep pack tokens, then the picture. With `--questions` it also prints 10 questions with the expected answers. Ask a fresh chat the same questions with each pack and count the right answers. The answers come from your own transcripts, so keep that output on your machine.
 
 ## Cache watcher
 
-After each reply, a small background process watches the clock. Claude Code's prompt cache lasts about 60 minutes. Before it ends, you get a desktop notification, so you can decide what to do before the next message becomes expensive.
+After each reply, a small background process watches the clock. Claude Code's prompt cache lasts about 60 minutes by default. Before it ends, you get a desktop notification, so you can decide what to do before the next message becomes expensive.
 
 - The warning comes 10 minutes before the cache ends. If the cache time is short, it comes at half of that time.
 - If your computer was asleep and the time has passed, the notification says the cache "has expired".
@@ -85,17 +93,37 @@ Two words in the snippets below are placeholders, not text to type:
 
 Replace them with your real folders. In PowerShell, do not type the angle brackets `<` and `>`.
 
-**Claude Code.** Run once:
+On Windows, use `bin\run-python.cmd` (PowerShell cannot run `bin/run-python`, which is a bash script). On macOS, Linux or Git Bash, use `bin/run-python`.
+
+**Claude Code.** Run it inside your project folder. The server is then added for that project only. Add `-s user` after `add` to use it in all projects.
+
+Windows:
+
+```
+claude mcp add session-memory -- "<repo>\bin\run-python.cmd" mcp --project "<your project>"
+```
+
+macOS, Linux or Git Bash:
 
 ```
 claude mcp add session-memory -- "<repo>/bin/run-python" mcp --project "<your project>"
 ```
 
-**VS Code.** Create `.vscode/mcp.json` in your project:
+**VS Code.** Create `.vscode/mcp.json` in your project.
+
+Windows:
+
+```json
+{"servers": {"session-memory": {"type": "stdio", "command": "<repo>/bin/run-python.cmd", "args": ["mcp", "--project", "${workspaceFolder}"]}}}
+```
+
+macOS, Linux or Git Bash:
 
 ```json
 {"servers": {"session-memory": {"type": "stdio", "command": "<repo>/bin/run-python", "args": ["mcp", "--project", "${workspaceFolder}"]}}}
 ```
+
+In JSON, write a Windows path with forward slashes (`C:/Users/you/Desktop/session-memory`) or with double backslashes (`C:\Users\you\Desktop\session-memory`).
 
 **Antigravity.** Open `~/.gemini/antigravity/mcp_config.json`. On Windows this is `C:\Users\you\.gemini\antigravity\mcp_config.json`. Do not replace the file: it already has other servers. Add this entry inside `mcpServers`:
 

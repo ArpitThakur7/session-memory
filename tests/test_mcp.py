@@ -198,3 +198,10 @@ def test_real_pillow_visual_png(tmp_path):
     data = base64.b64decode(img["data"])
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
     assert struct.unpack(">II", data[16:24]) == (1092, 1092)
+
+
+def test_brief_tool_points_to_pack(tmp_path):
+    proj = seed(tmp_path)
+    (memory_dir(proj) / "resume-pack.md").write_text("x", encoding="utf-8")
+    (r,) = drive(proj, call(1, "memory_brief"))
+    assert "Full resume pack: .claude/session-memory/resume-pack.md" in r["result"]["content"][0]["text"]
