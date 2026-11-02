@@ -110,3 +110,12 @@ def test_page_script_is_valid_javascript(tmp_path):
     js.write_text(scripts[0], encoding="utf-8")
     result = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_where_things_stand_only_from_last_requests_session():
+    g = Graph()
+    g.meta["last_prompt"] = {"text": "Add logout", "ts": "2026-11-01T10:00:00Z", "session": "a"}
+    g.meta["last_reply"] = {"text": "Old reply", "ts": "2026-11-01T09:00:00Z", "session": "b"}
+    assert build_view_data(g, "p")["brief"]["where"] == ""
+    g.meta["last_reply"] = {"text": "Logout added", "ts": "2026-11-01T10:01:00Z", "session": "a"}
+    assert build_view_data(g, "p")["brief"]["where"] == "Logout added"

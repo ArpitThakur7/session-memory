@@ -58,6 +58,12 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
         entry = graph.meta.get(key)
         return _text(entry.get("text")) if isinstance(entry, dict) else ""
 
+    # Same rule as the startup brief: only show a reply from the last request's session.
+    prompt, reply = graph.meta.get("last_prompt"), graph.meta.get("last_reply")
+    same_session = (isinstance(prompt, dict) and isinstance(reply, dict)
+                    and reply.get("session") == prompt.get("session"))
+    where = meta_text("last_reply") if same_session else ""
+
     todos = graph.meta.get("last_todos")
     items = todos.get("items") if isinstance(todos, dict) else None
     next_steps = [{"content": _text(t.get("content")), "status": _text(t.get("status"))}
@@ -68,7 +74,7 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
         "nodes": nodes,
         "edges": edges,
         "sessions": sessions,
-        "brief": {"last_request": meta_text("last_prompt"), "where": meta_text("last_reply"),
+        "brief": {"last_request": meta_text("last_prompt"), "where": where,
                   "next_steps": next_steps},
     }
 
