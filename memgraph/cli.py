@@ -18,7 +18,7 @@ from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, save_state
 from memgraph.pack import SIZES, write_pack
 from memgraph.viewer import write_map
-from memgraph.visual import IMAGE_FILE, render_visual_pack
+from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
 _RECALL_MAX_CHARS = 2000
 
@@ -147,7 +147,12 @@ def _pack(args: list[str], stdout: TextIO) -> int:
     mem, graph = _project()
     stdout.write(f"Resume pack: {write_pack(graph, mem, size, project)}\n")
     if "--no-visual" not in args:
-        png = render_visual_pack(graph, mem / IMAGE_FILE, project)
+        target = mem / IMAGE_FILE
+        if not has_story(graph):
+            target.unlink(missing_ok=True)  # never leave a stale picture behind
+            stdout.write("Visual pack skipped: nothing to draw yet\n")
+            return 0
+        png = render_visual_pack(graph, target, project)
         stdout.write(f"Visual pack: {png}\n" if png else "Visual pack skipped: install Pillow\n")
     return 0
 
