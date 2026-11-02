@@ -157,3 +157,42 @@ def test_memory_dir_ignores_itself_in_git(tmp_path):                  # I6
     (d / ".gitignore").write_text("graph.json\n", encoding="utf-8")   # the user's own rules are kept
     memory_dir(tmp_path)
     assert (d / ".gitignore").read_text(encoding="utf-8") == "graph.json\n"
+
+
+SUB_KEY = "s1/subagents/agent-a1.jsonl"
+
+
+def test_subagent_work_is_ingested_into_parent_task(tmp_path):
+    from tests.helpers import copy_subagent_fixture
+    d = copy_subagent_fixture(tmp_path); g, s = Graph(), {}
+    assert ingest_dir(d, g, s) == 6 + 4          # read, edit, command, error from the helper agent
+    assert s["offsets"][SUB_KEY] == (d / SUB_KEY).stat().st_size
+    task = g.meta["current_task"]["s1"]
+    rels = {(e["src"], e["rel"], e["dst"]) for e in g.edges.values()}
+    assert (task, "edited", "file:src/session.py") in rels and (task, "read", "file:src/auth.py") in rels
+    assert any(n["kind"] == "error" and n["label"] == "FAILED test_auth - KeyError" for n in g.nodes.values())
+    labels = {n["label"] for n in g.nodes.values()}
+    assert not any("Explore the auth" in l or "Subagent" in l for l in labels)
+    assert g.meta["last_prompt"]["text"] != "Explore the auth module and fix the session bug"
+    assert "Done: fixed" not in str(g.meta.get("last_reply"))
+    assert all(t["content"] != "Subagent step" for t in g.meta["last_todos"]["items"])
+    assert g.meta["sessions"]["s1"].get("context") == 42010 and "title" not in g.meta["sessions"]["s1"]
+    assert ingest_dir(d, g, s) == 0
+
+
+def test_subagent_cut_off_line_is_read_once_completed(tmp_path):
+    from tests.helpers import copy_subagent_fixture
+    d = copy_subagent_fixture(tmp_path); g, s = Graph(), {}
+    f = d / SUB_KEY
+    lines = f.read_bytes().splitlines(keepends=True)
+    f.write_bytes(b"".join(lines[:2]) + lines[2][:40])
+    assert ingest_dir(d, g, s) == 6 + 1
+    f.write_bytes(b"".join(lines))
+    assert ingest_dir(d, g, s) == 3
+
+
+def test_subagent_lines_without_sidechain_flag_are_still_filtered(tmp_path):
+    d = tmp_path / "proj"; (d / "s9" / "subagents").mkdir(parents=True)
+    (d / "s9" / "subagents" / "agent-z.jsonl").write_text(PROMPT_LINE + "\n", encoding="utf-8")
+    g = Graph()
+    assert ingest_dir(d, g, {}) == 0 and "last_prompt" not in g.meta

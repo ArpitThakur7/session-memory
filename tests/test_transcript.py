@@ -154,3 +154,9 @@ def test_wrap_up_recap_and_ask_are_a_reply():                         # I3
     line = _tool_line("mcp__ccd_turn__wrap_up", {"recap": "Login works.", "ask": "Commit it?"})
     assert _replies(line) == ["Login works. Commit it?"]
     assert _replies(_tool_line("mcp__ccd_turn__wrap_up", {"recap": "Only recap."})) == ["Only recap."]
+
+
+def test_sidechain_lines_keep_only_edit_read_command_error():
+    from tests.helpers import SUBAGENT_FIXTURE
+    kinds = [e.kind for e in parse_lines(SUBAGENT_FIXTURE.read_text(encoding="utf-8").splitlines())]
+    assert kinds == ["read", "edit", "command", "error"]

@@ -15,6 +15,9 @@ _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
 _PLAN_TOOL = "mcp__ccd_turn__update_plan"
 _WRAP_UP_TOOL = "mcp__ccd_turn__wrap_up"
+# A helper agent's (sidechain) line only contributes its work, never prompts, replies,
+# todos, usage or titles: its "prompt" is the dispatch text, not a user request.
+SIDECHAIN_KINDS = frozenset({"edit", "read", "command", "error"})
 
 
 def parse_ts(value) -> datetime | None:
@@ -161,13 +164,21 @@ def _parse_assistant(msg: dict, obj: dict, ts: str, session: str) -> list[Event]
 
 
 def parse_line(line: str) -> list[Event]:
-    """Events for one transcript line; invalid JSON or unknown types give []."""
+    """Events for one transcript line; invalid JSON or unknown types give [].
+
+    A sidechain (helper agent) line yields only SIDECHAIN_KINDS events."""
     try:
         obj = json.loads(line)
     except ValueError:
         return []
     if not isinstance(obj, dict):
         return []
+    if obj.get("isSidechain") is True:
+        return [e for e in _parse_obj(obj) if e.kind in SIDECHAIN_KINDS]
+    return _parse_obj(obj)
+
+
+def _parse_obj(obj: dict) -> list[Event]:
     if obj.get("type") in _TITLE_FIELDS:
         field, source = _TITLE_FIELDS[obj["type"]]
         title = obj.get(field)

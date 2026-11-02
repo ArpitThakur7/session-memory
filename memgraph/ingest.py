@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from memgraph.graph import Graph, write_json_atomic
-from memgraph.transcript import parse_line
+from memgraph.transcript import SIDECHAIN_KINDS, parse_line
 
 
 def memory_dir(cwd: Path) -> Path:
@@ -61,19 +61,27 @@ def record_pack_size(mem_dir: Path, size: str) -> None:
 
 
 def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
-    """Apply events from new complete lines of every *.jsonl in `transcripts_dir`.
+    """Apply events from new complete lines of every *.jsonl in `transcripts_dir`,
+    then of helper-agent transcripts at `<session-id>/subagents/agent-*.jsonl`.
 
-    Per-file byte offsets live in state["offsets"][filename]. Only bytes up to the
+    Per-file byte offsets live in state["offsets"][relative path] (a top-level
+    file's name, or "<session-id>/subagents/agent-x.jsonl"). Only bytes up to the
     last newline are consumed, so a line still being written is picked up later.
+    A helper agent's lines carry its parent's sessionId; only their edit, read,
+    command and error events are applied, so they land on the parent's current task.
     Returns the number of events applied.
     """
     offsets = state.setdefault("offsets", {})
+    root = Path(transcripts_dir)
     applied = 0
-    for path in _oldest_first(transcripts_dir):
+    files = [(p, False) for p in _oldest_first(root)]
+    files += [(p, True) for p in _oldest_first(root, "*/subagents/agent-*.jsonl")]
+    for path, sidechain in files:
+        key = path.relative_to(root).as_posix()
         try:
             with open(path, "rb") as fh:
                 size = fh.seek(0, 2)
-                offset = offsets.get(path.name, 0)
+                offset = offsets.get(key, 0)
                 if not isinstance(offset, int) or offset < 0 or offset > size:
                     offset = 0  # rewritten or truncated file: start over
                 fh.seek(offset)
@@ -90,27 +98,29 @@ def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
             except Exception:
                 continue  # an odd line must not stall this file forever
             for event in events:
+                if sidechain and event.kind not in SIDECHAIN_KINDS:
+                    continue
                 try:
                     graph.apply(event)
                 except Exception:
                     continue  # nor may one odd event
                 applied += 1
-        offsets[path.name] = offset + end
+        offsets[key] = offset + end
     return applied
 
 
-def _oldest_first(transcripts_dir: Path) -> list[Path]:
-    """Top-level *.jsonl files ordered by modification time, oldest first (name breaks ties).
+def _oldest_first(transcripts_dir: Path, pattern: str = "*.jsonl") -> list[Path]:
+    """Files matching `pattern` (default: top-level *.jsonl) ordered by modification time, oldest first (name breaks ties).
 
     Newer sessions are then applied last, so "latest" values in the graph come
     from the session the user worked in most recently.
     """
     keyed = []
     try:
-        for p in Path(transcripts_dir).glob("*.jsonl"):
+        for p in Path(transcripts_dir).glob(pattern):
             try:
                 if p.is_file():
-                    keyed.append((p.stat().st_mtime, p.name, p))
+                    keyed.append((p.stat().st_mtime, p.as_posix(), p))
             except OSError:
                 continue
     except OSError:

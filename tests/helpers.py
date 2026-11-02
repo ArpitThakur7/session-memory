@@ -2,6 +2,7 @@ from pathlib import Path
 
 FIXTURE: Path = Path(__file__).parent / "fixtures" / "session_a.jsonl"
 LINES: list[str] = FIXTURE.read_text(encoding="utf-8").splitlines()
+SUBAGENT_FIXTURE: Path = FIXTURE.parent / "s1" / "subagents" / "agent-a1.jsonl"
 
 
 def graph_from_fixture():
@@ -27,4 +28,14 @@ def copy_fixture(tmp_path: Path) -> Path:
     d = tmp_path / "proj"
     d.mkdir()
     shutil.copyfile(FIXTURE, d / FIXTURE.name)
+    return d
+
+
+def copy_subagent_fixture(tmp_path: Path) -> Path:
+    """copy_fixture plus the helper-agent transcript at proj/s1/subagents/agent-a1.jsonl."""
+    import shutil
+
+    d = copy_fixture(tmp_path)
+    (d / "s1" / "subagents").mkdir(parents=True)
+    shutil.copyfile(SUBAGENT_FIXTURE, d / "s1" / "subagents" / SUBAGENT_FIXTURE.name)
     return d
