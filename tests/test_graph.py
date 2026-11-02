@@ -233,3 +233,61 @@ def test_last_reply_kept_only_when_newer():                           # I3
     g.apply(Event("reply", "2026-11-01T11:00:00Z", "b", {"text": "older"}))
     g.apply(Event("reply", None, "b", {"text": "no time"}))
     assert g.meta["last_reply"] == {"text": "newer", "ts": "2026-11-01T12:00:00Z", "session": "a"}
+
+
+# ---- I3: locked load-modify-save -------------------------------------------
+
+def test_update_two_interleaved_writers_both_survive(tmp_path):
+    import threading
+    import time
+
+    from memgraph.graph import update
+
+    path = tmp_path / "graph.json"
+    Graph().save(path)
+    started = threading.Barrier(2)
+
+    def writer(name):
+        def fn(g):
+            g.add_node("decision", name, name, "2026-11-02T10:00:00+00:00")
+            time.sleep(0.15)  # hold the graph long enough for the other writer to try
+        started.wait()
+        update(path, fn)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert {"decision:a", "decision:b"} <= set(Graph.load(path).nodes)
+    assert not (tmp_path / "graph.lock").exists()
+
+
+def test_update_returns_fn_result_and_releases_on_error(tmp_path):
+    import pytest
+
+    from memgraph.graph import update
+
+    path = tmp_path / "graph.json"
+    assert update(path, lambda g: g.add_node("decision", "x", "x", "")) == "decision:x"
+    with pytest.raises(RuntimeError):
+        update(path, lambda g: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert not (tmp_path / "graph.lock").exists()
+    assert "decision:x" in Graph.load(path).nodes
+
+
+def test_update_gives_up_on_a_fresh_lock_and_replaces_a_stale_one(tmp_path):
+    import pytest
+
+    from memgraph.graph import GraphBusy, update
+
+    path = tmp_path / "graph.json"
+    lock = tmp_path / "graph.lock"
+    lock.write_text("someone else", encoding="utf-8")
+    with pytest.raises(GraphBusy):
+        update(path, lambda g: g.add_node("decision", "x", "x", ""), timeout=0.2)
+    assert not path.exists() and lock.read_text(encoding="utf-8") == "someone else"
+    old = lock.stat().st_mtime - 60
+    os.utime(lock, (old, old))  # its owner died 60 s ago
+    update(path, lambda g: g.add_node("decision", "x", "x", ""), timeout=0.2)
+    assert "decision:x" in Graph.load(path).nodes and not lock.exists()

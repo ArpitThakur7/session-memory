@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import BinaryIO
 
 from memgraph.brief import build_brief
-from memgraph.graph import Graph
+from memgraph.graph import Graph, GraphBusy, update
 from memgraph.ingest import memory_dir
-from memgraph.memory_ops import recall_lines, remember
+from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
 from memgraph.pack import SIZES, build_pack
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
@@ -99,8 +99,13 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         text = args.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("text must be a non-empty string")
-        remember(graph, text.strip(), datetime.now(timezone.utc))
-        graph.save(graph_path)
+        text = text.strip()
+        if len(text) > REMEMBER_MAX_CHARS:
+            raise ValueError(TOO_LONG.format(n=len(text)))
+        try:
+            update(graph_path, lambda g: remember(g, text, datetime.now(timezone.utc)))
+        except GraphBusy:
+            raise RuntimeError(BUSY) from None
         return [_text("Saved to project memory.")]
     size = args.get("size", "standard")
     visual = args.get("visual", False)

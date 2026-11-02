@@ -14,10 +14,10 @@ from typing import TextIO
 
 from memgraph import watch
 from memgraph.brief import build_brief
-from memgraph.graph import Graph
+from memgraph.graph import Graph, GraphBusy, graph_lock, update
 from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, save_state
-from memgraph.memory_ops import recall_lines, remember
+from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
 from memgraph.pack import SIZES, write_pack
 from memgraph.viewer import write_map
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
@@ -39,23 +39,31 @@ def _log_error(mem: Path | None) -> None:
             continue
 
 
-def _ingest(payload: dict, mem: Path) -> tuple[Graph, dict]:
-    graph = Graph.load(mem / "graph.json")
-    state = load_state(mem / "state.json")
-    ingest_dir(Path(os.path.dirname(payload["transcript_path"])), graph, state)
-    return graph, state
+def _ingest(payload: dict, mem: Path) -> Graph:
+    """Ingest new transcript lines under graph.lock (graph and offsets saved together).
+
+    When another writer holds the lock past the timeout, skip this run: ingest is
+    offset-based, so the next hook catches up. The graph as stored is returned.
+    """
+    path = mem / "graph.json"
+    try:
+        with graph_lock(path):
+            graph = Graph.load(path)
+            state = load_state(mem / "state.json")
+            ingest_dir(Path(os.path.dirname(payload["transcript_path"])), graph, state)
+            graph.save(path)
+            save_state(mem / "state.json", state)
+            return graph
+    except GraphBusy:
+        return Graph.load(path)
 
 
 def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
     if name == "hook-stop":
-        graph, state = _ingest(payload, mem)
-        graph.save(mem / "graph.json")
-        save_state(mem / "state.json", state)
+        _ingest(payload, mem)
         watch.arm(mem, Path(payload["transcript_path"]), Path(payload["cwd"]), now)
     elif name == "hook-session-start":
-        graph, state = _ingest(payload, mem)
-        graph.save(mem / "graph.json")
-        save_state(mem / "state.json", state)
+        graph = _ingest(payload, mem)
         brief = build_brief(graph, project_root=Path(payload["cwd"]), mem_dir=mem)
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
@@ -82,9 +90,15 @@ def _remember(args: list[str], stdout: TextIO, now: datetime) -> int:
     if not text:
         stdout.write("Usage: remember <text>\n")
         return 2
-    mem, graph = _project()
-    remember(graph, text, now)
-    graph.save(mem / "graph.json")
+    if len(text) > REMEMBER_MAX_CHARS:
+        stdout.write(TOO_LONG.format(n=len(text)) + "\n")
+        return 2
+    mem = memory_dir(Path.cwd())
+    try:
+        update(mem / "graph.json", lambda graph: remember(graph, text, now))
+    except GraphBusy:
+        stdout.write(BUSY + "\n")
+        return 1
     stdout.write("Saved to project memory.\n")
     return 0
 

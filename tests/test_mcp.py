@@ -205,3 +205,23 @@ def test_brief_tool_points_to_pack(tmp_path):
     (memory_dir(proj) / "resume-pack.md").write_text("x", encoding="utf-8")
     (r,) = drive(proj, call(1, "memory_brief"))
     assert "Full resume pack: .claude/session-memory/resume-pack.md" in r["result"]["content"][0]["text"]
+
+
+def test_remember_rejects_text_over_1000_chars(tmp_path):   # M5
+    proj = seed(tmp_path)
+    too_long, ok = drive(proj, call(1, "memory_remember", text="z" * 1001),
+                         call(2, "memory_remember", text="w" * 1000))
+    assert too_long["result"]["isError"] is True
+    assert "1000" in too_long["result"]["content"][0]["text"].replace(",", "")
+    assert ok["result"]["isError"] is False
+    nodes = Graph.load(memory_dir(proj) / "graph.json").nodes.values()
+    assert not any(n["label"] == "z" * 1001 for n in nodes)
+
+
+def test_remember_reports_busy_graph(tmp_path, monkeypatch):   # I3
+    monkeypatch.setattr("memgraph.graph.LOCK_TIMEOUT", 0.2)
+    proj = seed(tmp_path)
+    (memory_dir(proj) / "graph.lock").write_text("held", encoding="utf-8")
+    (r,) = drive(proj, call(1, "memory_remember", text="note"))
+    assert r["result"]["isError"] is True and "busy" in r["result"]["content"][0]["text"].lower()
+    assert not Graph.load(memory_dir(proj) / "graph.json").search("note", 5)

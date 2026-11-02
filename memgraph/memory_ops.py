@@ -6,6 +6,9 @@ from datetime import datetime
 from memgraph.graph import Graph, _digest
 
 RECALL_MAX_CHARS = 2000
+REMEMBER_MAX_CHARS = 1000
+TOO_LONG = "Text too long ({n:,} characters); the limit is 1,000. Save a shorter note."
+BUSY = "Not saved: project memory is busy (another update is running). Try again."
 
 
 def recall_lines(graph: Graph, query: str) -> list[str]:

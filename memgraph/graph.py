@@ -1,10 +1,13 @@
 """A small JSON-backed memory graph built from transcript events."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import tempfile
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +81,69 @@ def write_json_atomic(path: Path, obj) -> None:
         except OSError:
             pass
         raise
+
+
+LOCK_TIMEOUT = 2.0  # seconds a writer waits for graph.lock before giving up
+LOCK_STALE_SECONDS = 30  # a lock older than this was left by a writer that died
+_LOCK_POLL = 0.02
+
+
+class GraphBusy(Exception):
+    """Another writer held graph.lock for longer than the timeout."""
+
+
+def _lock_path(path: Path) -> Path:
+    return Path(path).with_name(Path(path).stem + ".lock")
+
+
+@contextlib.contextmanager
+def graph_lock(path: Path, timeout: float | None = None):
+    """Hold `<graph>.lock` (created with O_EXCL) next to the graph at `path`.
+
+    Waits up to `timeout` seconds (default LOCK_TIMEOUT), replacing a lock older
+    than LOCK_STALE_SECONDS; raises GraphBusy when it cannot get the lock in time.
+    """
+    lock = _lock_path(path)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    token = f"{os.getpid()}:{uuid.uuid4().hex}"
+    give_up = time.monotonic() + (LOCK_TIMEOUT if timeout is None else timeout)
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > LOCK_STALE_SECONDS:
+                    lock.unlink()
+                    continue
+            except OSError:
+                pass  # vanished meanwhile, or held open on Windows: just retry
+            if time.monotonic() >= give_up:
+                raise GraphBusy(f"{lock.name} is held by another writer") from None
+            time.sleep(_LOCK_POLL)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(token)
+        break
+    try:
+        yield
+    finally:
+        try:
+            if lock.read_text(encoding="utf-8") == token:
+                lock.unlink()
+        except OSError:
+            pass
+
+
+def update(path: Path, fn, timeout: float | None = None):
+    """Locked load-modify-save of the graph at `path`; returns fn(graph).
+
+    Raises GraphBusy when the lock cannot be taken in time (nothing is written).
+    """
+    with graph_lock(path, timeout):
+        graph = Graph.load(path)
+        result = fn(graph)
+        graph.save(path)
+        return result
 
 
 class Graph:

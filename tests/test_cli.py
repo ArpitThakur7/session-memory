@@ -212,3 +212,42 @@ def test_pack_empty_graph_says_nothing_to_draw_and_removes_stale_png(tmp_path, m
     out = run(["pack"], "")
     assert out.splitlines()[1] == "Visual pack skipped: nothing to draw yet"
     assert not (mem / "memory.png").exists()
+
+
+def _hold_graph_lock(mem):
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "graph.lock").write_text("held", encoding="utf-8")
+
+
+def test_remember_reports_busy_graph_instead_of_losing_data(tmp_path, monkeypatch):   # I3
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("memgraph.graph.LOCK_TIMEOUT", 0.2)
+    _hold_graph_lock(tmp_path / ".claude/session-memory")
+    rc, out = run_rc(["remember", "Use", "SQLite"], "")
+    assert rc == 1 and "busy" in out.lower()
+    assert not (tmp_path / ".claude/session-memory/graph.json").exists()
+
+
+def test_hooks_skip_ingest_when_graph_is_busy_and_still_arm(tmp_path, monkeypatch):   # I3
+    from memgraph import watch
+
+    armed = []
+    monkeypatch.setattr(watch, "arm", lambda *a, **k: armed.append(a))
+    monkeypatch.setattr("memgraph.graph.LOCK_TIMEOUT", 0.2)
+    mem = tmp_path / "proj/.claude/session-memory"
+    _hold_graph_lock(mem)
+    payload = hook_input(tmp_path)
+    assert run(["hook-stop"], payload) == ""
+    assert not (mem / "graph.json").exists() and not (mem / "state.json").exists()
+    assert len(armed) == 1 and not (mem / "error.log").exists()
+    (mem / "graph.lock").unlink()
+    assert run(["hook-stop"], payload) == ""  # next hook catches up
+    assert (mem / "graph.json").exists() and not (mem / "graph.lock").exists()
+
+
+def test_remember_text_capped_at_1000_chars(tmp_path, monkeypatch):   # M5
+    monkeypatch.chdir(tmp_path)
+    rc, out = run_rc(["remember", "x" * 1001], "")
+    assert rc == 2 and "1000" in out.replace(",", "")
+    assert not (tmp_path / ".claude/session-memory/graph.json").exists()
+    assert run(["remember", "y" * 1000], "") == "Saved to project memory.\n"
