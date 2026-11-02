@@ -17,6 +17,7 @@ from pathlib import Path
 from memgraph.brief import DATA_NOTE, _newest, _one_line
 from memgraph.graph import Graph
 from memgraph.pack import built_line
+from memgraph.relevance import is_project_file, project_errors
 from memgraph.transcript import clean_prompt, fmt_local
 
 IMAGE_SIZE = (1092, 1092)
@@ -104,7 +105,7 @@ def _wrap(text: str, font, width: int, max_lines: int) -> list[str]:
     return lines
 
 
-def _story(graph: Graph):
+def _story(graph: Graph, project_root: Path | None = None):
     """Sessions newest first: (title, [(task, n_files, errors)], session errors)."""
     sessions = graph.meta.get("sessions") or {}
     nodes = graph.nodes
@@ -122,7 +123,7 @@ def _story(graph: Graph):
             key = (str(e.get("last") or ""), str(src))
             if dst.get("id") not in owner or key > owner[dst.get("id")]:
                 owner[dst.get("id")] = key
-            if rel == "edited":
+            if rel == "edited" and is_project_file(dst.get("label", ""), project_root):
                 edited.setdefault(src, set()).add(dst.get("id"))
     failed: dict[str, list[dict]] = {}
     for e in edges:  # second pass: attribution never depends on edge order
@@ -130,6 +131,8 @@ def _story(graph: Graph):
         if e.get("rel") == "failed" and dst:
             src = e.get("src")
             failed.setdefault(owner[src][1] if src in owner else src, []).append(dst)
+    shown = {id(n) for n in project_errors(graph, [n for g in failed.values() for n in g], project_root)}
+    failed = {k: [n for n in v if id(n) in shown] for k, v in failed.items()}
     out = []
     for sid in sorted(asked, key=lambda s: ((sessions.get(s) or {}).get("last") or "", s), reverse=True):
         title = (sessions.get(sid) or {}).get("title") or sid
@@ -147,7 +150,7 @@ def has_story(graph: Graph) -> bool:
 
 
 # A line is (indent_px, [(text, style), ...]); style is ink, head, muted or red.
-def _lines(graph: Graph, font, col_w: int, request_lines: int = 2):
+def _lines(graph: Graph, font, col_w: int, request_lines: int = 2, project_root: Path | None = None):
     """Lazily yield lines: decisions first, then sessions newest first.
 
     A request takes up to `request_lines` lines; a None line is skipped."""
@@ -159,7 +162,7 @@ def _lines(graph: Graph, font, col_w: int, request_lines: int = 2):
         for d in decisions:
             for i, ln in enumerate(_wrap(scrub(d.get("label", "")), font, col_w - _INDENT, 2)):
                 yield (0, [("\u2022 " + ln, "ink")]) if i == 0 else (_INDENT, [(ln, "ink")])
-    for title, tasks, s_errors in _story(graph):
+    for title, tasks, s_errors in _story(graph, project_root):
         if not first:
             yield 0, []
         first = False
@@ -208,9 +211,9 @@ def _next_steps(graph: Graph, font, col_w: int) -> list[list]:
     return items
 
 
-def _files_touched(graph: Graph, font, col_w: int) -> list[list]:
+def _files_touched(graph: Graph, font, col_w: int, project_root: Path | None = None) -> list[list]:
     """Heading plus lines of file names (never paths), most-touched first."""
-    files = sorted((n for n in graph.nodes.values() if n.get("kind") == "file"),
+    files = sorted((n for n in graph.nodes.values() if n.get("kind") == "file" and is_project_file(n.get("label", ""), project_root)),
                    key=lambda n: (str(n.get("last") or ""), str(n.get("label", ""))), reverse=True)
     files.sort(key=lambda n: n.get("count") or 0, reverse=True)  # stable: newest first among equals
     names: list[str] = []
@@ -261,7 +264,7 @@ def _columns(flow: list, cap: int) -> list[list]:
     return [flow[:mid], flow[mid:]]
 
 
-def compose(graph: Graph, font, col_w: int, cap: int) -> dict:
+def compose(graph: Graph, font, col_w: int, cap: int, project_root: Path | None = None) -> dict:
     """Everything drawn below the header: {"flow": lines, "columns": [left, right], "footer": str}.
 
     The story fills at most 2*cap lines (cut with the MORE marker). Spare lines go,
@@ -271,7 +274,7 @@ def compose(graph: Graph, font, col_w: int, cap: int) -> dict:
     limit = 2 * cap
 
     def story(request_lines: int) -> list:
-        lines = (ln for ln in _lines(graph, font, col_w, request_lines) if ln[1] is not None)
+        lines = (ln for ln in _lines(graph, font, col_w, request_lines, project_root) if ln[1] is not None)
         return list(islice(lines, limit + 1))
 
     flow = story(2)
@@ -279,7 +282,7 @@ def compose(graph: Graph, font, col_w: int, cap: int) -> dict:
         flow = flow[: limit - 1] + [(0, [(MORE, "muted")])]
         return {"flow": flow, "columns": [flow[:cap], flow[cap:]], "footer": FOOTER}
     extras: list = []
-    for items in (_next_steps(graph, font, col_w), _files_touched(graph, font, col_w)):
+    for items in (_next_steps(graph, font, col_w), _files_touched(graph, font, col_w, project_root)):
         extras += _fit(items, limit - len(flow) - len(extras))
     longer = story(4)
     if len(longer) + len(extras) <= limit:
@@ -302,7 +305,7 @@ def render_visual_pack(graph: Graph, path: Path, project_root: Path | None = Non
     w, h = IMAGE_SIZE
     col_w = (w - 2 * _MARGIN - _GAP) // 2
     cap = (h - _BAR - _FOOT - _MARGIN // 2) // _LINE  # lines per column
-    page = compose(graph, body, col_w, cap)
+    page = compose(graph, body, col_w, cap, project_root)
 
     img = Image.new("RGB", IMAGE_SIZE, "white")
     d = ImageDraw.Draw(img)

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from memgraph.graph import Graph
+from memgraph.relevance import is_project_file, project_errors
 from memgraph.transcript import clean_prompt, fmt_local
 
 TITLE = "# Project memory (auto-loaded by session-memory)"
@@ -62,6 +63,8 @@ def _changed_files(graph: Graph, files: list[dict], project_root: Path | None) -
     edited = {e.get("dst") for e in graph.edges.values() if e.get("rel") == "edited"}
     shown: list[str] = []
     for node in _newest([n for n in files if n.get("id") in edited]):
+        if not is_project_file(node.get("label", ""), project_root):
+            continue
         path = display_path(str(node.get("label", "")), project_root)
         if path is not None and path not in shown:
             shown.append(path)
@@ -146,7 +149,7 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
                  for n in _newest(by_kind("decision"), _MAX_DECISIONS)]
     files = _changed_files(graph, by_kind("file"), project_root)
     errors = [f"- {_one_line(n.get('label', ''))}"
-              for n in _newest(by_kind("error"), _MAX_ERRORS)]
+              for n in _newest(project_errors(graph, by_kind("error"), project_root), _MAX_ERRORS)]
     sections = [
         (f"## Next steps (as of {todo_stamp})" if todo_stamp else "## Next steps", next_steps),
         ("## Decisions", decisions),

@@ -210,8 +210,8 @@ def test_changed_files_relative_to_project_root(tmp_path):           # I3
     b = build_brief(g, project_root=root)
     assert "- src/app.py" in b and "secret.py" not in b and b.count("- docs/notes.md") == 1
     assert inside not in b
-    unfiltered = build_brief(g)  # no root (bench): paths as recorded
-    assert inside in unfiltered and outside in unfiltered
+    unfiltered = build_brief(_files_graph(["/work/proj/src/app.py", "/work/else/secret.py"]))
+    assert "/work/proj/src/app.py" in unfiltered and "/work/else/secret.py" in unfiltered  # no root: as recorded
 
 
 def test_default_budget_is_9500():                                    # M1

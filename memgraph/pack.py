@@ -6,6 +6,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from memgraph.relevance import project_errors
 from memgraph.brief import (DATA_NOTE, _changed_files, _fmt_ts, _newest, _one_line, _request_line,
                             where_things_stand)
 from memgraph.graph import Graph
@@ -90,7 +91,7 @@ def build_pack(graph: Graph, size: str = "standard", project_root: Path | None =
           for t in todos if isinstance(t, dict) and t.get("status") != "completed"][:n_todo]),
         ("## Decisions", [f"- {_clip(n.get('label', ''))}" for n in _newest(by_kind("decision"), n_dec)]),
         ("## Changed files", [l for l in _changed_files(graph, by_kind("file"), project_root)][:n_files]),
-        ("## Recent errors", [f"- {_clip(n.get('label', ''))}" for n in _newest(by_kind("error"), n_err)]),
+        ("## Recent errors", [f"- {_clip(n.get('label', ''))}" for n in _newest(project_errors(graph, by_kind("error"), project_root), n_err)]),
     ]
     if size != "tiny":
         sections.append(("## Timeline", _timeline(graph, size == "deep")))
