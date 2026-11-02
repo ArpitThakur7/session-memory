@@ -31,8 +31,9 @@ def _label(node: dict, project_root: Path | None) -> str:
     return label[:_MAX_LABEL]
 
 
-def build_view_data(graph: Graph, project_name: str, project_root: Path | None = None) -> dict:
-    """The plain JSON-able data the map page draws."""
+def build_view_data(graph: Graph, project_name: str, project_root: Path | None = None,
+                    tokens: dict | None = None) -> dict:
+    """The plain JSON-able data the map page draws (`tokens` from savings.token_view)."""
     nodes = [
         {"id": str(n.get("id", nid)), "kind": str(n.get("kind", "")), "label": _label(n, project_root),
          "count": n.get("count") if isinstance(n.get("count"), int) else 1,
@@ -72,6 +73,8 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
         "sessions": sessions,
         "brief": {"last_request": meta_text("last_prompt"), "where": where,
                   "next_steps": next_steps},
+        "tokens": tokens if isinstance(tokens, dict) else {
+            "available": False, "reason": "No Claude Code transcripts found for this project."},
     }
 
 
@@ -82,17 +85,19 @@ def _script_json(data: dict) -> str:
     return text
 
 
-def render_map(graph: Graph, project_name: str, project_root: Path | None = None) -> str:
+def render_map(graph: Graph, project_name: str, project_root: Path | None = None,
+               tokens: dict | None = None) -> str:
     """The whole map page as one HTML string, with the data embedded."""
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    payload = _script_json(build_view_data(graph, project_name, project_root))
+    payload = _script_json(build_view_data(graph, project_name, project_root, tokens))
     return template.replace(PLACEHOLDER, payload, 1)
 
 
-def write_map(graph: Graph, mem_dir: Path, project_name: str, project_root: Path | None = None) -> Path:
+def write_map(graph: Graph, mem_dir: Path, project_name: str, project_root: Path | None = None,
+              tokens: dict | None = None) -> Path:
     """Write the page to `mem_dir`/memory-map.html atomically and return its path."""
     path = Path(mem_dir) / MAP_FILE
-    html = render_map(graph, project_name, project_root)
+    html = render_map(graph, project_name, project_root, tokens)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:

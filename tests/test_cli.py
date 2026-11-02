@@ -382,3 +382,66 @@ def test_event_log_failure_never_breaks_the_brief(tmp_path, monkeypatch):
     out = run(["hook-session-start"], hook_input(tmp_path, source="clear"))
     assert "Fix login test" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "disk full" in (tmp_path / "proj/.claude/session-memory/error.log").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------- token counter: usage and savings commands
+
+NOW = datetime(2026, 11, 2, 0, 0, tzinfo=timezone.utc)
+
+
+def _seeded(tmp_path, monkeypatch):
+    from tests.test_savings import seed as seed_transcripts
+
+    t, _ = seed_transcripts(tmp_path)
+    (tmp_path / "proj").mkdir()
+    monkeypatch.chdir(tmp_path / "proj")
+    return t
+
+
+def test_usage_command_table_and_totals(tmp_path, monkeypatch):
+    t = _seeded(tmp_path, monkeypatch)
+    rc, out = run_rc(["usage", "--transcripts", str(t), "--by", "day"], "", now=NOW)
+    assert rc == 0
+    assert "| 2026-11-01 | 7 |" in out
+    assert "Total: 7 replies" in out and "duplicates skipped 1" in out
+    assert "cache hit" in out and "prices as of 2026-10-06" in out
+
+
+def test_usage_command_days_window_and_json(tmp_path, monkeypatch):
+    t = _seeded(tmp_path, monkeypatch)
+    rc, out = run_rc(["usage", "--transcripts", str(t), "--days", "0", "--json"], "", now=NOW)
+    data = json.loads(out)
+    assert rc == 0 and data["totals"]["replies"] == 0 and data["duplicates"] == 1
+    rc, out = run_rc(["usage", "--transcripts", str(t), "--by", "who", "--json"], "", now=NOW)
+    data = json.loads(out)
+    assert {r["key"]: r["replies"] for r in data["rows"]} == {"main": 5, "helper": 2}
+    assert data["prices_as_of"] == "2026-10-06" and data["by"] == "who"
+
+
+def test_usage_command_bad_args(tmp_path, monkeypatch):
+    _seeded(tmp_path, monkeypatch)
+    assert run_rc(["usage", "--by", "planet"], "", now=NOW)[0] == 2
+    assert run_rc(["usage", "--days", "x"], "", now=NOW)[0] == 2
+
+
+def test_usage_command_uses_recorded_transcripts_dir(tmp_path, monkeypatch):
+    t = _seeded(tmp_path, monkeypatch)
+    from memgraph.ingest import memory_dir
+    (memory_dir(tmp_path / "proj") / "state.json").write_text(json.dumps({"transcripts_dir": str(t)}), encoding="utf-8")
+    rc, out = run_rc(["usage", "--days", "36500"], "", now=NOW)
+    assert "Total: 7 replies" in out
+
+
+def test_usage_command_missing_transcripts(tmp_path, monkeypatch):
+    _seeded(tmp_path, monkeypatch)
+    rc, out = run_rc(["usage", "--transcripts", str(tmp_path / "none")], "", now=NOW)
+    assert rc == 0 and "No Claude Code transcripts found" in out
+
+
+def test_savings_command_text_and_json(tmp_path, monkeypatch):
+    t = _seeded(tmp_path, monkeypatch)
+    rc, out = run_rc(["savings", "--transcripts", str(t)], "", now=NOW)
+    assert rc == 0 and "Measured saved: 0 tokens" in out and "Missed (estimate):" in out
+    rc, out = run_rc(["savings", "--transcripts", str(t), "--json"], "", now=NOW)
+    data = json.loads(out)
+    assert data["totals"]["cold_restarts"] == 1 and data["fresh_starts"] == []

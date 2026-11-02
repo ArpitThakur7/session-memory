@@ -174,3 +174,48 @@ def format_savings(res: dict) -> str:
     out += ["", savings_totals_line(res),
             "Dollars price saved or rebuilt tokens as cache writes of the reply's model."]
     return "\n".join(out)
+
+
+_MAP_DAYS = 14
+_MAP_ROWS = 20
+
+
+def token_view(transcripts_dir: Path | None, mem_dir: Path, now: datetime | None = None,
+               ttl_minutes: int | None = None) -> dict:
+    """The map's "Tokens" data: last 14 days by day (local dates, empty days included),
+    by model and by who, their totals, and the savings totals with the latest rows."""
+    from memgraph.transcript import local_time
+    from memgraph.usage import summarize, totals
+
+    if transcripts_dir is None or not Path(transcripts_dir).is_dir():
+        return {"available": False, "reason": "No Claude Code transcripts found for this project."}
+    usage = collect_usage(transcripts_dir)
+    if not usage.replies:
+        return {"available": False, "reason": "No replies with token usage found in this project's transcripts."}
+    now = now or datetime.now(timezone.utc)
+    today = local_time(now).date()
+    first_day = today - timedelta(days=_MAP_DAYS - 1)
+    start = local_time(now).replace(year=first_day.year, month=first_day.month, day=first_day.day,
+                                    hour=0, minute=0, second=0, microsecond=0)
+    recent = [r for r in usage.replies if r.ts >= start]
+    by_day = {r["key"]: r for r in summarize(recent, "day")}
+    days = []
+    for i in range(_MAP_DAYS):
+        key = (first_day + timedelta(days=i)).isoformat()
+        days.append(by_day.get(key) or {"key": key, **totals([]), "cost": 0.0})
+    if ttl_minutes is None:
+        from memgraph.watch import ttl_minutes as default_ttl
+        ttl_minutes = default_ttl()
+    sav = measure_savings(transcripts_dir, mem_dir, ttl_minutes, usage)
+    return {
+        "available": True,
+        "prices_as_of": PRICES_AS_OF,
+        "since": start.isoformat(),
+        "duplicates": usage.duplicates,
+        "totals": totals(recent),
+        "days": days,
+        "models": summarize(recent, "model"),
+        "who": summarize(recent, "who"),
+        "savings": {"totals": sav["totals"], "fresh_starts": sav["fresh_starts"][-_MAP_ROWS:],
+                    "cold_restarts": sav["cold_restarts"][-_MAP_ROWS:]},
+    }

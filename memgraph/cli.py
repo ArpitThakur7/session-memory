@@ -8,7 +8,7 @@ import sys
 import tempfile
 import traceback
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TextIO
 
@@ -19,6 +19,8 @@ from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, pack_size, record_pack_size, save_state
 from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
 from memgraph.pack import PACK_FILE, SIZES, write_pack
+from memgraph.usage import (GROUPINGS, PRICES_AS_OF, collect_usage, summarize, totals, totals_line,
+                            transcripts_dir_for, usage_table)
 from memgraph.viewer import write_map
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
@@ -161,7 +163,12 @@ def _stats(stdout: TextIO) -> int:
 def _map(args: list[str], stdout: TextIO) -> int:
     project = Path.cwd()
     mem, graph = _project()
-    path = write_map(graph, mem, project.name, project)
+    try:
+        tokens = savings.token_view(transcripts_dir_for(project, mem), mem)
+    except Exception:  # the map must still draw; the Tokens section then says why
+        _log_error(mem)
+        tokens = {"available": False, "reason": "Token data could not be read (see error.log)."}
+    path = write_map(graph, mem, project.name, project, tokens)
     stdout.write(f"Memory map: {path}\n")
     if "--no-open" not in args:
         webbrowser.open(path.as_uri())
@@ -190,6 +197,64 @@ def _pack(args: list[str], stdout: TextIO) -> int:
             return 0
         png = render_visual_pack(graph, target, project)
         stdout.write(f"Visual pack: {png}\n" if png else "Visual pack skipped: install Pillow\n")
+    return 0
+
+
+_USAGE_HELP = "Usage: usage [--days N] [--by day|session|model|who] [--json] [--transcripts PATH]\n"
+_SAVINGS_HELP = "Usage: savings [--json] [--transcripts PATH]\n"
+NO_TRANSCRIPTS = "No Claude Code transcripts found at {path}. Pass --transcripts PATH.\n"
+
+
+def _opt(args: list[str], name: str) -> str | None:
+    """Value after `name`, "" when it is the last word, None when absent."""
+    if name not in args:
+        return None
+    i = args.index(name)
+    return args[i + 1] if i + 1 < len(args) else ""
+
+
+def _transcripts(args: list[str]) -> tuple[Path, Path]:
+    mem = memory_dir(Path.cwd())
+    given = _opt(args, "--transcripts")
+    return (Path(given).expanduser() if given else transcripts_dir_for(Path.cwd(), mem)), mem
+
+
+def _usage(args: list[str], stdout: TextIO, now: datetime) -> int:
+    days_text, by = _opt(args, "--days"), _opt(args, "--by") or "day"
+    try:
+        days = 7 if days_text is None else int(days_text)
+    except ValueError:
+        days = -1
+    if days < 0 or by not in GROUPINGS:
+        stdout.write(_USAGE_HELP)
+        return 2
+    tdir, _mem = _transcripts(args)
+    if not tdir.is_dir():
+        stdout.write(NO_TRANSCRIPTS.format(path=tdir))
+        return 0
+    result = collect_usage(tdir)
+    since = now - timedelta(days=days)
+    recent = [r for r in result.replies if r.ts >= since]
+    rows, total = summarize(recent, by), totals(recent)
+    if "--json" in args:
+        stdout.write(json.dumps({"by": by, "days": days, "since": since.isoformat(), "rows": rows, "totals": total,
+                                 "duplicates": result.duplicates, "prices_as_of": PRICES_AS_OF}, indent=1) + "\n")
+        return 0
+    stdout.write(f"Token usage, last {days} days, by {by} (exact, from transcripts):\n")
+    stdout.write(usage_table(rows, by) + "\n\n" + totals_line(total, result.duplicates) + "\n")
+    return 0
+
+
+def _savings(args: list[str], stdout: TextIO) -> int:
+    if any(a.startswith("-") and a not in ("--json", "--transcripts") for a in args):
+        stdout.write(_SAVINGS_HELP)
+        return 2
+    tdir, mem = _transcripts(args)
+    if not tdir.is_dir():
+        stdout.write(NO_TRANSCRIPTS.format(path=tdir))
+        return 0
+    res = savings.measure_savings(tdir, mem, watch.ttl_minutes())
+    stdout.write(json.dumps(res, indent=1) + "\n" if "--json" in args else savings.format_savings(res) + "\n")
     return 0
 
 
@@ -243,7 +308,11 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _mcp(args)
     if cmd == "pack":
         return _pack(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | watch --project <dir> | mcp [--project <dir>])\n")
+    if cmd == "usage":
+        return _usage(args, stdout, now)
+    if cmd == "savings":
+        return _savings(args, stdout)
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>])\n")
     return 2
 
 

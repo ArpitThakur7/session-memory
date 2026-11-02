@@ -47,10 +47,11 @@ def test_initialize_echoes_version(tmp_path):
     }
 
 
-def test_tools_list_has_four_tools_with_schemas(tmp_path):
+def test_tools_list_has_five_tools_with_schemas(tmp_path):
     (r,) = drive(seed(tmp_path), req(1, "tools/list"))
     tools = {t["name"]: t for t in r["result"]["tools"]}
-    assert set(tools) == {"memory_brief", "memory_recall", "memory_remember", "memory_pack"}
+    assert set(tools) == {"memory_brief", "memory_recall", "memory_remember", "memory_pack", "memory_usage"}
+    assert tools["memory_usage"]["inputSchema"]["properties"]["days"]["type"] == "integer"
     for t in tools.values():
         assert t["description"] and t["inputSchema"]["type"] == "object"
     assert tools["memory_recall"]["inputSchema"]["required"] == ["query"]
@@ -149,7 +150,7 @@ def test_serve_subprocess_smoke(tmp_path):
                        input=stdin, capture_output=True, timeout=30, cwd=root)
     replies = [json.loads(l) for l in p.stdout.decode("utf-8").splitlines()]
     assert [r["id"] for r in replies] == [1, 2]
-    assert len(replies[1]["result"]["tools"]) == 4
+    assert len(replies[1]["result"]["tools"]) == 5
     assert p.returncode == 0
 
 
@@ -236,3 +237,26 @@ def test_brief_tool_footer_names_the_recall_tool(tmp_path):   # M7
 def test_pack_tool_has_built_line(tmp_path):   # I1
     (r,) = drive(seed(tmp_path), call(1, "memory_pack", size="tiny"))
     assert r["result"]["content"][0]["text"].splitlines()[2].startswith("Built 20")
+
+
+def test_memory_usage_reports_totals_and_savings(tmp_path):
+    from tests.test_savings import seed as seed_transcripts
+
+    proj = seed(tmp_path)
+    t, _mem = seed_transcripts(tmp_path)
+    (memory_dir(proj) / "state.json").write_text(json.dumps({"transcripts_dir": str(t)}), encoding="utf-8")
+    (r,) = drive(proj, call(1, "memory_usage", days=36500))
+    text = r["result"]["content"][0]["text"]
+    assert r["result"]["isError"] is False
+    assert "Total: 7 replies" in text and "duplicates skipped 1" in text
+    assert "Measured saved:" in text and "Missed (estimate):" in text and "prices as of 2026-10-06" in text
+
+
+def test_memory_usage_rejects_bad_days_and_handles_missing_transcripts(tmp_path):
+    proj = seed(tmp_path)
+    (memory_dir(proj) / "state.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "none")}),
+                                                 encoding="utf-8")
+    bad, missing = drive(proj, call(1, "memory_usage", days=0), call(2, "memory_usage"))
+    assert bad["result"]["isError"] is True
+    assert missing["result"]["isError"] is False
+    assert "No Claude Code transcripts found" in missing["result"]["content"][0]["text"]

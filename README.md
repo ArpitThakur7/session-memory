@@ -74,6 +74,30 @@ python C:\Users\you\Desktop\session-memory\bench\compare_packs.py "C:\Users\you\
 
 Use your real user name and project folder. Do not type angle brackets. The first command prints a table: history tokens, then tiny, standard and deep pack tokens, then the picture. With `--questions` it also prints 10 questions with the expected answers. Ask a fresh chat the same questions with each pack and count the right answers. The answers come from your own transcripts, so keep that output on your machine.
 
+## Token counter
+
+See how many tokens this project used and how much the plugin saved. It reads Claude Code's local transcripts, so it costs 0 model tokens and nothing leaves your machine. Run it inside your project folder (on Windows, `bin\run-python.cmd`):
+
+```
+bin/run-python usage                 # last 7 days, one row per day
+bin/run-python usage --days 30 --by model    # or --by session, --by who (main chat vs helper agents)
+bin/run-python savings               # measured savings and missed savings
+```
+
+Add `--json` for machine-readable output, or `--transcripts PATH` to point at a transcripts folder. Without it the folder the hooks last saw is used, else `~/.claude/projects/<project path with every non-letter/digit as ->`. The 3D map has a "Tokens" section (last 14 days, by model, by who, cache hit rate, saved vs missed), and the MCP tool `memory_usage` gives the same totals.
+
+**What is measured (exact):**
+
+- Every token number comes from the `usage` field Claude Code records on each model reply: input, cache writes (5-minute and 1-hour when the transcript says which), cache reads and output. Helper-agent (subagent) transcripts are included.
+- Claude Code writes the same reply several times while streaming. Copies with the same message id and request id are counted once; the totals line says how many were skipped. Synthetic lines (usage-limit notices, API errors) are not replies and are skipped.
+- Cache hit = cache reads / (input + cache writes + cache reads).
+- **Measured saved** (`savings`): each time a new or cleared session starts with the brief, the hook logs the old chat's context size. The new chat's first real reply records what it actually read. Saved = old context - new first-reply context (never below 0). Both numbers come from transcripts. Only fresh starts made after this feature was installed are counted.
+
+**What is estimated:**
+
+- **Missed (estimate)**: when a main chat was resumed after more than `SESSION_MEMORY_CACHE_TTL_MIN` idle minutes (default 60), the next reply rebuilt the cache. That rebuild is measured; what a fresh start would have cost instead is estimated as the latest brief's characters / 4 (500 tokens when no brief size is known). "Could have saved" = rebuild - that estimate.
+- **Dollars** use Anthropic's list prices as of 2026-10-06 (shown next to every dollar figure). Cache writes cost 1.25 x input (5 minutes) or 2 x input (1 hour); a write without a TTL breakdown is priced as a 5-minute write. Cache reads cost 0.1 x input unless the price list says otherwise. Saved and rebuilt tokens are priced as cache writes. A model missing from the price table shows "—" and the rest of the total is marked "partial". Your plan may not bill per token; the dollars show list-price value.
+
 ## Cache watcher
 
 After each reply, a small background process watches the clock. Claude Code's prompt cache lasts about 60 minutes by default. Before it ends, you get a desktop notification, so you can decide what to do before the next message becomes expensive.
@@ -87,7 +111,7 @@ After each reply, a small background process watches the clock. Claude Code's pr
 
 ## Use the memory in other tools
 
-The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember` and `memory_pack`.
+The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack` and `memory_usage` (token totals and savings for the last `days` days, default 7).
 
 Two words in the snippets below are placeholders, not text to type:
 
@@ -162,9 +186,10 @@ The guard never blocks slash commands (messages starting with `/`) or messages s
 Everything is under `<project>/.claude/session-memory/`:
 
 - `graph.json` - the memory graph
-- `state.json` - how far each transcript has been read
+- `state.json` - how far each transcript has been read, and where the transcripts are
 - `graph.lock` - held for a moment while something writes `graph.json`, so two writers never overwrite each other (a lock older than 30 seconds is ignored)
 - `guard.json` - the cache guard's "already warned about this message" note
+- `events.jsonl` - one line per guard block and per fresh start with a brief (times, session ids and sizes only, no text), used by `savings`
 - `watch.json` - the cache watcher's deadline, warning time and which deadline was already announced
 - `watch.lock` - the running cache watcher's process id, so only one watcher runs per project
 - `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command, the cache watcher, and, for `resume-pack.md`, each new session)
@@ -203,7 +228,7 @@ The live test needs an interactive Claude Code session and spends usage limit, s
 - [ ] With `SESSION_MEMORY_CACHE_TTL_MIN=4` set, a desktop notification appears about 2 minutes after a reply.
 - [ ] After `/clear`, the brief contains the "Full resume pack" line (and the "Visual summary" line when the picture is current), and `resume-pack.md` contains your latest request (the "Built" time stays the same when nothing changed).
 - [ ] After a reply, close Claude Code: the cache watcher still shows its notification.
-- [ ] In VS Code and in Antigravity, the session-memory server lists 4 tools: `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack`.
+- [ ] In VS Code and in Antigravity, the session-memory server lists 5 tools: `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack`, `memory_usage`.
 
 **Continuity check.** Do 10 `/clear` resumes during real work. Record whether the first answer named the current task and the next step correctly. Target: at least 9 of 10.
 

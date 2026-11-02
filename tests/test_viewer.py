@@ -125,3 +125,29 @@ def test_page_has_time_range_picker():
     html = render_map(graph_from_fixture(), "RepoQuest")
     for label in ("1 hour", "5 hours", "1 day", "7 days", "All time", "Time range"):
         assert label in html
+
+
+def test_view_data_tokens_absent_without_transcripts(tmp_path):
+    data = build_view_data(graph_from_fixture(), "p")
+    assert data["tokens"]["available"] is False
+    html = render_map(graph_from_fixture(), "p")
+    assert 'id="tokens"' in html and "<h2>" in html
+
+
+def test_view_data_tokens_from_transcripts(tmp_path):
+    from datetime import datetime, timezone
+
+    from memgraph.savings import token_view
+    from tests.test_savings import seed
+
+    t, mem = seed(tmp_path)
+    tokens = token_view(t, mem, now=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))
+    assert tokens["available"] is True and tokens["prices_as_of"] == "2026-10-06"
+    assert len(tokens["days"]) == 14 and tokens["days"][-2]["key"] == "2026-11-01"
+    assert tokens["days"][-2]["replies"] == 7 and tokens["days"][0]["replies"] == 0
+    assert tokens["totals"]["replies"] == 7 and tokens["duplicates"] == 1
+    assert {m["key"] for m in tokens["models"]} == {"claude-opus-5-5"}
+    assert {w["key"] for w in tokens["who"]} == {"main", "helper"}
+    assert tokens["savings"]["totals"]["measured_saved_tokens"] == 120003 - 20004
+    html = render_map(graph_from_fixture(), "p", tokens=tokens)
+    assert embedded_data(html)["tokens"]["totals"]["replies"] == 7

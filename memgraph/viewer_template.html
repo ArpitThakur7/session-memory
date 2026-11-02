@@ -202,6 +202,36 @@ body.range-empty #rangeEmpty { display: grid; }
 .side-foot { display: flex; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--border); }
 .side-foot .btn { flex: 1; }
 .empty-note { color: var(--muted); padding: 4px 8px; font-size: 12px; }
+.sec-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
+}
+.sec-toggle .chev { width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+.sec-toggle[aria-expanded="false"] .chev { transform: rotate(-45deg); }
+#tokBody[hidden] { display: none; }
+.tok { margin: 0 8px; display: flex; flex-direction: column; gap: 12px; font-variant-numeric: tabular-nums; }
+.tok .k { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+.tok-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tok-stat { padding: 7px 9px; border-radius: 9px; background: var(--field); min-width: 0; }
+.tok-stat .v { font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tok-stat .l { font-size: 10.5px; color: var(--muted); }
+.tok-bars { display: flex; align-items: stretch; gap: 3px; height: 72px; }
+.tok-bar { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column-reverse; border-radius: 3px; overflow: hidden; }
+.tok-bar:hover { background: var(--hover); }
+.tok-seg { flex: none; width: 100%; }
+.tok-new { background: #D85A30; }
+.tok-cached { background: #1D9E75; }
+.tok-out { background: var(--accent); }
+.tok-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.tok-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--ink-2); margin-top: 5px; }
+.tok-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.tok-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.tok-split { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--field); margin-bottom: 4px; }
+.tok-line { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--ink-2); }
+.tok-line .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.tok-line .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tok-line .meta { color: var(--muted); font-size: 11px; flex: none; }
+.tok-note { font-size: 10.5px; color: var(--muted); line-height: 1.4; }
 
 /* ---------- details ---------- */
 #details {
@@ -339,6 +369,10 @@ body.preload * { transition: none !important; }
     <section class="section">
       <h2>Sessions <span id="sessCount" class="n"></span></h2>
       <div id="sessions" class="list"></div>
+    </section>
+    <section class="section" id="tokens">
+      <h2><button id="tokToggle" class="sec-toggle" type="button" aria-expanded="true" aria-controls="tokBody">Tokens <span class="chev" aria-hidden="true"></span></button> <span id="tokSub" class="n"></span></h2>
+      <div id="tokBody"></div>
     </section>
   </div>
   <div class="side-foot">
@@ -1677,6 +1711,124 @@ const DATA = /*__MEMORY_DATA__*/null;
     }
   }
 
+  // tokens: exact usage from transcripts, measured savings vs estimated missed savings
+  const TOK_COLORS = ['#6c63d4', '#1D9E75', '#D85A30', '#378ADD', '#BA7517', '#D4537E', '#888780'];
+  function renderTokens() {
+    const T = DATA.tokens || {};
+    const body = $('tokBody');
+    const sub = $('tokSub');
+    body.replaceChildren();
+    const wrap = el('div', 'tok');
+    body.append(wrap);
+    const num = (v) => (typeof v === 'number' && isFinite(v) ? v : 0);
+    const usd = (v, partial) => (typeof v === 'number' && isFinite(v) ? '$' + v.toFixed(2) + (partial ? ' (partial)' : '') : '—');
+    const sumOf = (r) => num(r.input) + num(r.cache_write) + num(r.cache_read) + num(r.output);
+    if (!T.available) {
+      sub.textContent = '';
+      wrap.append(el('div', 'empty-note', String(T.reason || 'No token data.')));
+      return;
+    }
+    const t = T.totals || {};
+    const asOf = String(T.prices_as_of || '');
+    sub.textContent = fmtTokens(sumOf(t)) + ' · 14 days';
+    const stats = el('div', 'tok-stats');
+    function stat(value, label, title) {
+      const s = el('div', 'tok-stat');
+      s.append(el('div', 'v', value), el('div', 'l', label));
+      if (title) s.title = title;
+      stats.append(s);
+    }
+    stat(fmtTokens(sumOf(t)), 'tokens used', sumOf(t).toLocaleString() + ' tokens in ' + num(t.replies).toLocaleString() + ' replies');
+    stat(usd(t.cost, t.cost_partial), 'cost · prices ' + asOf);
+    stat((Math.round(num(t.cache_hit_rate) * 1000) / 10) + '%', 'cache hit', 'Cache reads / everything the model read');
+    stat(num(t.replies).toLocaleString(), 'replies', num(T.duplicates).toLocaleString() + ' duplicate streaming lines skipped');
+    wrap.append(stats);
+
+    const days = Array.isArray(T.days) ? T.days : [];
+    if (days.length) {
+      const box = el('div');
+      box.append(el('div', 'k', 'By day'));
+      const bars = el('div', 'tok-bars');
+      const max = Math.max(1, ...days.map(sumOf));
+      for (const d of days) {
+        const bar = el('div', 'tok-bar');
+        const parts = [['tok-new', num(d.input) + num(d.cache_write)], ['tok-cached', num(d.cache_read)], ['tok-out', num(d.output)]];
+        for (const [cls, v] of parts) {
+          if (!v) continue;
+          const seg = el('div', 'tok-seg ' + cls);
+          seg.style.height = Math.max(1, (v / max) * 100) + '%';
+          bar.append(seg);
+        }
+        bar.title = String(d.key) + ': ' + sumOf(d).toLocaleString() + ' tokens · ' + usd(d.cost, d.cost_partial);
+        bars.append(bar);
+      }
+      box.append(bars);
+      const axis = el('div', 'tok-axis');
+      axis.append(el('span', '', String(days[0].key || '').slice(5)), el('span', '', String(days[days.length - 1].key || '').slice(5)));
+      box.append(axis);
+      const legend = el('div', 'tok-legend');
+      for (const [cls, label] of [['tok-new', 'new + cache write'], ['tok-cached', 'cache read'], ['tok-out', 'output']]) {
+        const s = el('span');
+        s.append(el('i', cls), el('span', '', label));
+        legend.append(s);
+      }
+      box.append(legend);
+      wrap.append(box);
+    }
+
+    function split(title, rows, nameOfRow) {
+      rows = (Array.isArray(rows) ? rows : []).filter((r) => r && sumOf(r) > 0);
+      if (!rows.length) return;
+      const box = el('div');
+      box.append(el('div', 'k', title));
+      const total = rows.reduce((a, r) => a + sumOf(r), 0) || 1;
+      const bar = el('div', 'tok-split');
+      rows.forEach((r, i) => {
+        const seg = el('div');
+        seg.style.width = (sumOf(r) / total) * 100 + '%';
+        seg.style.background = TOK_COLORS[i % TOK_COLORS.length];
+        seg.title = nameOfRow(r);
+        bar.append(seg);
+      });
+      box.append(bar);
+      rows.forEach((r, i) => {
+        const line = el('div', 'tok-line');
+        const dot = el('span', 'dot');
+        dot.style.background = TOK_COLORS[i % TOK_COLORS.length];
+        line.append(dot, el('span', 'txt', nameOfRow(r)), el('span', 'meta', fmtTokens(sumOf(r)) + ' · ' + usd(r.cost, r.cost_partial)));
+        line.title = nameOfRow(r) + ': ' + sumOf(r).toLocaleString() + ' tokens in ' + num(r.replies).toLocaleString() + ' replies';
+        box.append(line);
+      });
+      wrap.append(box);
+    }
+    split('By model', T.models, (r) => String(r.key || '(no model)'));
+    split('Who', T.who, (r) => (r.key === 'helper' ? 'Helper agents' : 'Main chat'));
+
+    const s = (T.savings && T.savings.totals) || {};
+    const box = el('div');
+    box.append(el('div', 'k', 'Savings'));
+    const saved = el('div', 'tok-line');
+    const d1 = el('span', 'dot');
+    d1.style.background = '#1D9E75';
+    saved.append(d1, el('span', 'txt', 'Measured saved'), el('span', 'meta', fmtTokens(num(s.measured_saved_tokens)) + ' · ' + usd(s.measured_saved_usd)));
+    saved.title = num(s.fresh_starts) + ' fresh starts: old chat context minus the new chat’s first reply, both from transcripts';
+    const missed = el('div', 'tok-line');
+    const d2 = el('span', 'dot');
+    d2.style.background = '#D85A30';
+    missed.append(d2, el('span', 'txt', 'Missed (estimate)'), el('span', 'meta', fmtTokens(num(s.missed_estimate_tokens)) + ' · ' + usd(s.missed_estimate_usd)));
+    missed.title = num(s.cold_restarts) + ' cold restarts: measured cache rebuilds minus an estimated brief size';
+    box.append(saved, missed);
+    wrap.append(box);
+    wrap.append(el('div', 'tok-note', 'Exact counts from this project’s transcripts. Dollars at prices as of ' + asOf
+      + '. Cache writes without a TTL are priced as 5-minute writes. Missed savings are an estimate.'));
+  }
+  $('tokToggle').addEventListener('click', () => {
+    const b = $('tokToggle');
+    const open = b.getAttribute('aria-expanded') !== 'true';
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    $('tokBody').hidden = !open;
+  });
+
   // time range picker
   function rangeNotice() {
     const none = !!range.ms && rangeTotal === 0;
@@ -1909,6 +2061,7 @@ const DATA = /*__MEMORY_DATA__*/null;
   renderChips();
   renderBrief();
   renderSessions();
+  renderTokens();
   rebuild();
   rangeNotice();
   resize();

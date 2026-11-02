@@ -54,6 +54,15 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "memory_usage",
+        "description": "Exact token usage of this project from Claude Code's local transcripts (last N days), "
+                       "plus measured savings from fresh starts and estimated missed savings.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "minimum": 1, "default": 7}},
+        },
+    },
 ]
 
 
@@ -95,6 +104,8 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         query = query.strip()
         lines = recall_lines(graph, query)
         return [_text("\n".join(lines) if lines else f'Nothing found for "{query}".')]
+    if name == "memory_usage":
+        return [_text(_usage_text(args, mem, project))]
     if name == "memory_remember":
         text = args.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -122,6 +133,27 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         else:
             content.append(_text("Visual pack unavailable: install Pillow"))
     return content
+
+
+def _usage_text(args: dict, mem: Path, project: Path) -> str:
+    from datetime import timedelta
+
+    from memgraph.savings import measure_savings, savings_totals_line
+    from memgraph.usage import collect_usage, totals, totals_line, transcripts_dir_for
+    from memgraph.watch import ttl_minutes
+
+    days = args.get("days", 7)
+    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+        raise ValueError("days must be a positive integer")
+    tdir = transcripts_dir_for(project, mem)
+    if not tdir.is_dir():
+        return "No Claude Code transcripts found for this project."
+    result = collect_usage(tdir)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    recent = [r for r in result.replies if r.ts >= since]
+    sav = measure_savings(tdir, mem, ttl_minutes(), result)
+    return (f"Token usage, last {days} days (exact, from transcripts):\n"
+            + totals_line(totals(recent), result.duplicates) + "\n" + savings_totals_line(sav))
 
 
 def _handle(msg, mem: Path | None, project: Path, mem_error: str = ""):
