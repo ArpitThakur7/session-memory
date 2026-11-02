@@ -1,3 +1,4 @@
+import pytest
 import io
 import json
 import shutil
@@ -175,3 +176,29 @@ def test_map_opens_browser_with_file_uri(tmp_path, monkeypatch):
     path = tmp_path / ".claude/session-memory/memory-map.html"
     assert out == f"Memory map: {path}\n"
     assert opened == [path.as_uri()] and opened[0].startswith("file:")
+
+
+def test_pack_writes_text_and_image(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    run(["hook-stop"], hook_input(tmp_path))
+    monkeypatch.chdir(tmp_path / "proj")
+    out = run(["pack", "--size", "tiny"], "")
+    mem = tmp_path / "proj/.claude/session-memory"
+    assert out == f"Resume pack: {mem / 'resume-pack.md'}\nVisual pack: {mem / 'memory.png'}\n"
+    assert (mem / "resume-pack.md").exists() and (mem / "memory.png").exists()
+
+
+def test_pack_no_visual_and_bad_size(tmp_path, monkeypatch):
+    run(["hook-stop"], hook_input(tmp_path))
+    monkeypatch.chdir(tmp_path / "proj")
+    out = run(["pack", "--no-visual"], "")
+    assert out.splitlines() == [f"Resume pack: {tmp_path / 'proj/.claude/session-memory/resume-pack.md'}"]
+    rc, text = run_rc(["pack", "--size", "huge"], "")
+    assert rc == 2 and text.startswith("Usage: pack")
+
+
+def test_pack_reports_missing_pillow(tmp_path, monkeypatch):
+    run(["hook-stop"], hook_input(tmp_path))
+    monkeypatch.chdir(tmp_path / "proj")
+    monkeypatch.setattr("memgraph.cli.render_visual_pack", lambda *a, **k: None)
+    assert run(["pack"], "").splitlines()[1] == "Visual pack skipped: install Pillow"

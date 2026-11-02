@@ -16,7 +16,9 @@ from memgraph.brief import build_brief
 from memgraph.graph import Graph, _digest
 from memgraph.guard import GuardConfig, decide, last_activity
 from memgraph.ingest import ingest_dir, load_state, memory_dir, save_state
+from memgraph.pack import SIZES, write_pack
 from memgraph.viewer import write_map
+from memgraph.visual import IMAGE_FILE, render_visual_pack
 
 _RECALL_MAX_CHARS = 2000
 
@@ -133,6 +135,23 @@ def _map(args: list[str], stdout: TextIO) -> int:
     return 0
 
 
+def _pack(args: list[str], stdout: TextIO) -> int:
+    size = "standard"
+    if "--size" in args:
+        i = args.index("--size")
+        size = args[i + 1] if i + 1 < len(args) else ""
+    if size not in SIZES:
+        stdout.write(f"Usage: pack [--size {'|'.join(SIZES)}] [--no-visual]\n")
+        return 2
+    project = Path.cwd()
+    mem, graph = _project()
+    stdout.write(f"Resume pack: {write_pack(graph, mem, size, project)}\n")
+    if "--no-visual" not in args:
+        png = render_visual_pack(graph, mem / IMAGE_FILE, project)
+        stdout.write(f"Visual pack: {png}\n" if png else "Visual pack skipped: install Pillow\n")
+    return 0
+
+
 def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     cmd, args = (argv[0], argv[1:]) if argv else ("", [])
@@ -155,7 +174,9 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _stats(stdout)
     if cmd == "map":
         return _map(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open])\n")
+    if cmd == "pack":
+        return _pack(args, stdout)
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual])\n")
     return 2
 
 

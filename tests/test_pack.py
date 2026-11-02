@@ -91,7 +91,7 @@ def test_non_ascii_paths_survive(tmp_path):
 
 @pytest.mark.skipif(os.name != "nt", reason="backslash drive paths are absolute only on Windows")
 def test_windows_backslash_paths_survive():
-    out = pack.build_pack(_graph_with_file("C:\proj\src\ünï.py"), "standard", Path("C:/proj"))
+    out = pack.build_pack(_graph_with_file(r"C:\proj\src\ünï.py"), "standard", Path("C:/proj"))
     assert "- src/ünï.py" in out
 
 
