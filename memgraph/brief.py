@@ -80,6 +80,15 @@ def _earlier_requests(graph: Graph, last_prompt) -> list[str]:
     return [f"- {_one_line(r.get('text', ''))}" for r in recent[:_MAX_EARLIER]]
 
 
+def where_things_stand(graph: Graph) -> str:
+    """The last assistant reply as one line, only when it belongs to the same
+    session as the last request (otherwise it would describe other work)."""
+    prompt, reply = graph.meta.get("last_prompt"), graph.meta.get("last_reply")
+    if isinstance(prompt, dict) and isinstance(reply, dict) and reply.get("session") == prompt.get("session"):
+        return _one_line(reply.get("text", ""))
+    return ""
+
+
 def _cut(text: str, overflow: int) -> str:
     return text[: max(0, len(text) - overflow)].rstrip()
 
@@ -131,9 +140,7 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
         session_title = _one_line(title) if title else None
         request_text = _one_line(last_prompt.get("text", ""))
         earlier = _earlier_requests(graph, last_prompt)
-        last_reply = graph.meta.get("last_reply")
-        if isinstance(last_reply, dict) and last_reply.get("session") == sid:
-            reply_text = _one_line(last_reply.get("text", ""))
+        reply_text = where_things_stand(graph)
 
     def render() -> str:
         lines = [TITLE, DATA_NOTE]

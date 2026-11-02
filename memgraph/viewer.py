@@ -7,7 +7,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from memgraph.brief import display_path
+from memgraph.brief import display_path, where_things_stand
 from memgraph.graph import Graph
 
 TEMPLATE_PATH = Path(__file__).with_name("viewer_template.html")
@@ -58,11 +58,7 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
         entry = graph.meta.get(key)
         return _text(entry.get("text")) if isinstance(entry, dict) else ""
 
-    # Same rule as the startup brief: only show a reply from the last request's session.
-    prompt, reply = graph.meta.get("last_prompt"), graph.meta.get("last_reply")
-    same_session = (isinstance(prompt, dict) and isinstance(reply, dict)
-                    and reply.get("session") == prompt.get("session"))
-    where = meta_text("last_reply") if same_session else ""
+    where = _text(where_things_stand(graph))
 
     todos = graph.meta.get("last_todos")
     items = todos.get("items") if isinstance(todos, dict) else None
