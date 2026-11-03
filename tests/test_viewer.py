@@ -250,3 +250,23 @@ def test_view_data_pack_path_relative_to_project(tmp_path):
     (mem / "resume-pack.md").write_text("x", encoding="utf-8")
     path = write_map(graph_from_fixture(), mem, "p", root)
     assert embedded_data(path.read_text(encoding="utf-8"))["pack_path"] == ".claude/session-memory/resume-pack.md"
+
+
+def test_page_never_builds_html_from_strings():
+    from memgraph.viewer import TEMPLATE_PATH
+
+    page = TEMPLATE_PATH.read_text(encoding="utf-8")
+    for banned in ("innerHTML", "outerHTML", "insertAdjacentHTML", "eval(", "new Function", "document.write"):
+        assert banned not in page
+    assert page.count("/*__MEMORY_DATA__*/null") == 1
+
+
+def test_page_has_devtool_shell():
+    html = render_map(graph_from_fixture(), "p")
+    for marker in ('id="titlebar"', 'id="activity"', 'id="side"', 'id="insp"', 'id="panel"', 'id="status"',
+                   'id="paletteWrap"', 'id="tapeCanvas"', 'data-tab="json"', 'data-ptab="problems"',
+                   'id="sideSplit"', 'id="inspSplit"', 'id="panelSplit"', "Hand Claude this"):
+        assert marker in html
+    assert "backdrop-filter" in html and "@supports" in html  # glass with a solid fallback
+    assert "prefers-reduced-motion" in html and ":focus-visible" in html
+    assert "text-transform: uppercase" not in html and "@font-face" not in html and "@import" not in html
