@@ -1,5 +1,8 @@
 {"hooks": {
-  "SessionStart": [{"matcher": "startup|clear", "hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-session-start"}]}],
+  "SessionStart": [{"matcher": "startup|clear", "hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-session-start"}]},
+                   {"matcher": "compact", "hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-compact"}]}],
   "UserPromptSubmit": [{"hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-prompt"}]}],
-  "Stop": [{"hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-stop"}]}]
+  "Stop": [{"hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-stop"}]}],
+  "PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-pre-read"}]}],
+  "PreCompact": [{"hooks": [{"type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/run-python\" hook-compact"}]}]
 }}

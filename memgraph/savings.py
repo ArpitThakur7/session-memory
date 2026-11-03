@@ -161,6 +161,42 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
             "ttl_minutes": ttl_minutes, "brief_tokens_estimate": estimate, "prices_as_of": PRICES_AS_OF}
 
 
+SUMMARY_FILE = "summary.json"
+SUMMARY_PENDING_REFRESH_SECONDS = 600
+
+
+def _events_signature(mem_dir: Path) -> list[int] | None:
+    try:
+        st = (Path(mem_dir) / EVENTS_FILE).stat()
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_size]
+
+
+def refresh_summary(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int, now: datetime) -> bool:
+    """Write summary.json (measured-saved totals) for the status line, which must never scan transcripts.
+
+    Recomputed only when events.jsonl changed since the last summary, or every 10 minutes while a
+    fresh start still waits for its first reply. Returns True when it was recomputed."""
+    from memgraph.graph import write_json_atomic
+    from memgraph.ingest import load_state
+
+    mem_dir = Path(mem_dir)
+    old = load_state(mem_dir / SUMMARY_FILE)
+    sig = _events_signature(mem_dir)
+    updated = parse_ts(old.get("updated")) if isinstance(old.get("updated"), str) else None
+    if updated is not None and old.get("events") == sig:
+        pending = _int(old.get("fresh_starts_pending")) or 0
+        if not pending or (now - updated).total_seconds() < SUMMARY_PENDING_REFRESH_SECONDS:
+            return False
+    t = measure_savings(transcripts_dir, mem_dir, ttl_minutes)["totals"]
+    write_json_atomic(mem_dir / SUMMARY_FILE, {
+        "updated": now.isoformat(timespec="seconds"), "events": sig,
+        "measured_saved_tokens": t["measured_saved_tokens"], "measured_saved_usd": t["measured_saved_usd"],
+        "fresh_starts": t["fresh_starts"], "fresh_starts_pending": t["fresh_starts_pending"]})
+    return True
+
+
 def _usd(value: float | None) -> str:
     if value is None:
         return "—"

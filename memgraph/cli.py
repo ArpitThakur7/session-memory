@@ -63,9 +63,26 @@ def _ingest(payload: dict, mem: Path) -> Graph:
 
 
 def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
-    if name == "hook-stop":
+    if name == "hook-pre-read":
+        from memgraph import readguard
+
+        reason = readguard.check(payload, mem, now)
+        if reason:
+            _emit(stdout, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                  "permissionDecisionReason": reason}})
+            _log_event(mem, {"type": "read_denied", "session": payload.get("session_id")})
+    elif name == "hook-compact":
+        from memgraph import readguard
+
+        readguard.bump_compaction(payload, mem)
+    elif name == "hook-stop":
         _ingest(payload, mem)
         watch.arm(mem, Path(payload["transcript_path"]), Path(payload["cwd"]), now)
+        try:  # the status line's "saved" figure; cheap unless new events arrived
+            savings.refresh_summary(Path(os.path.dirname(payload["transcript_path"])), mem, watch.ttl_minutes(),
+                                    now)
+        except Exception:
+            _log_error(mem)
     elif name == "hook-session-start":
         graph = _ingest(payload, mem)
         try:  # the brief points at the pack, so it must show what the brief shows
@@ -286,14 +303,20 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
     if cmd.startswith("hook-"):
         mem = None
         try:
-            if cmd not in ("hook-stop", "hook-session-start", "hook-prompt"):
+            if cmd not in ("hook-stop", "hook-session-start", "hook-prompt", "hook-pre-read", "hook-compact"):
                 raise ValueError(f"unknown hook {cmd}")
             payload = json.loads(stdin.read())
+            if not isinstance(payload, dict):
+                raise ValueError("hook input is not a JSON object")
             mem = memory_dir(Path(payload["cwd"]))
             _run_hook(cmd, payload, mem, stdout, now)
         except Exception:
             _log_error(mem)
         return 0
+    if cmd == "statusline":
+        from memgraph.statusline import statusline_main
+
+        return statusline_main(stdin, stdout, now)
     if cmd == "watch":
         return _watch(args)
     if cmd == "remember":
@@ -320,7 +343,11 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.setup_mcp import setup_main
 
         return setup_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    if cmd == "setup-statusline":
+        from memgraph.statusline import setup_statusline_main
+
+        return setup_statusline_main(args, stdout)
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 

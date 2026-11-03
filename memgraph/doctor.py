@@ -200,12 +200,32 @@ def _check_mcp_antigravity(ctx) -> dict:
                             "mcp_antigravity", "Antigravity", f"{_cli()} setup-mcp antigravity")
 
 
+def _check_statusline(ctx) -> dict:
+    from memgraph.statusline import is_ours
+
+    path = ctx["home"] / ".claude" / "settings.json"
+    fix = f"{_cli()} setup-statusline (optional: chat size, cache time left and tokens saved)"
+    if not path.is_file():
+        return _check("statusline", "skip", f"Status line not set (optional; no {path})", fix)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return _check("statusline", "skip", f"Status line unknown: {path} is not valid JSON", fix)
+    current = data.get("statusLine") if isinstance(data, dict) else None
+    if current is None:
+        return _check("statusline", "skip", "Status line not set (optional)", fix)
+    if is_ours(current):
+        return _check("statusline", "ok", f"Status line set ({path})")
+    return _check("statusline", "skip", "Another status line is set (kept as is)",
+                  f"{_cli()} setup-statusline --force to replace it (a backup is kept)")
+
+
 CHECKS = [("python", "_check_python", True), ("pillow", "_check_pillow", False),
           ("plugin_files", "_check_plugin_files", True), ("claude_cli", "_check_claude_cli", False),
           ("plugin_installed", "_check_plugin_installed", False), ("transcripts", "_check_transcripts", False),
           ("memory", "_check_memory", False), ("watcher", "_check_watcher", False),
           ("mcp_claude", "_check_mcp_claude", False), ("mcp_vscode", "_check_mcp_vscode", False),
-          ("mcp_antigravity", "_check_mcp_antigravity", False)]
+          ("mcp_antigravity", "_check_mcp_antigravity", False), ("statusline", "_check_statusline", False)]
 
 
 def run_checks(project: Path, home: Path | None = None) -> list[dict]:
