@@ -2,6 +2,35 @@
 
 A free Claude Code plugin that keeps a small memory of your project, so you can start a fresh chat instead of resuming a huge one.
 
+## Quick start
+
+1. Download or clone this repository, then run the installer from its folder. It finds Python 3.10 or newer, offers to install Pillow (optional), adds the plugin to Claude Code and checks the setup.
+
+   Windows (PowerShell or cmd; the script is a local file, nothing is downloaded):
+
+   ```
+   powershell -ExecutionPolicy Bypass -File install.ps1
+   ```
+
+   macOS, Linux or Git Bash:
+
+   ```
+   ./install.sh
+   ```
+
+   Add `-DryRun` (Windows) or `--dry-run` to see every step without changing anything, `-Yes`/`--yes` to install Pillow without asking, `-NoPillow`/`--no-pillow` to skip it, and `-Uninstall`/`--uninstall` to remove the plugin again (memory folders in your projects are left alone).
+
+2. Check a project. Run this inside your project folder (use the real folder where you keep this repository):
+
+   ```
+   C:\Users\you\Desktop\session-memory\bin\run-python.cmd doctor
+   /path/to/session-memory/bin/run-python doctor
+   ```
+
+   Each line is ✓ (fine), ✗ (needs a fix, shown below it) or – (unknown or optional). Add `--project PATH` to check another folder, or `--json` for machine-readable output.
+
+3. Open Claude Code in your project, work as usual, and use `/memory-map` to see the memory.
+
 > **Unofficial.** session-memory is a community project. It is not made, endorsed or supported by Anthropic, and is not affiliated with Anthropic.
 
 ## What it does
@@ -148,6 +177,23 @@ After each reply, a small background process watches the clock. Claude Code's pr
 ## Use the memory in other tools
 
 The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack` and `memory_usage` (token totals and savings for the last `days` days, default 7).
+
+## Use in VS Code / Antigravity
+
+Run `setup-mcp` inside your project folder (on Windows, `bin\run-python.cmd`; elsewhere `bin/run-python`, with the full path to this repository):
+
+```
+bin/run-python setup-mcp vscode         # writes <project>/.vscode/mcp.json
+bin/run-python setup-mcp antigravity    # adds an entry to ~/.gemini/antigravity/mcp_config.json
+bin/run-python setup-mcp claude         # runs: claude mcp add -s user session-memory ...
+```
+
+- It prints what it will change first. Add `--dry-run` to only print it, and `--project PATH` for another folder. For `claude`, `--scope user|project|local` picks the scope (default `user`).
+- Other servers and settings in the file are kept. The old file is copied to `<file>.<date-time>.bak` first. Running it again says "already set up", or updates an old session-memory entry.
+- It refuses to touch a file that is not valid JSON, or that has comments, and prints the entry to add by hand.
+- Restart the editor afterwards. `doctor` shows which tools have the server.
+
+### Manual setup (fallback)
 
 Two words in the snippets below are placeholders, not text to type:
 

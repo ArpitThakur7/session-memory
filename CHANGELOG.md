@@ -2,6 +2,14 @@
 
 All notable changes to this project are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Installers.** `install.ps1` (Windows PowerShell 5.1 and 7) and `install.sh` (macOS, Linux, Git Bash) find Python, offer Pillow, install the plugin and run `doctor`. Both have a dry-run and an uninstall mode.
+- **`doctor`.** Checks Python, Pillow, plugin files, the `claude` CLI, the plugin install, transcripts, memory, the cache watcher and MCP setup, each with a one-line fix.
+- **`setup-mcp claude|vscode|antigravity`.** Adds the MCP server with a backup, an atomic write and `--dry-run`.
+
 ## 0.2.0
 
 ### Added
