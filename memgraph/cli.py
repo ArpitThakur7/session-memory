@@ -312,7 +312,15 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _usage(args, stdout, now)
     if cmd == "savings":
         return _savings(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>])\n")
+    if cmd == "doctor":
+        from memgraph.doctor import doctor_main
+
+        return doctor_main(args, stdout)
+    if cmd == "setup-mcp":
+        from memgraph.setup_mcp import setup_main
+
+        return setup_main(args, stdout)
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 
