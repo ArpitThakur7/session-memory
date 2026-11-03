@@ -1,3 +1,5 @@
 *.jsonl -text
 bin/run-python text eol=lf
 bin/run-python.cmd text eol=crlf
+install.sh text eol=lf
+install.ps1 text eol=crlf
