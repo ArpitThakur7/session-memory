@@ -168,6 +168,16 @@ body.side-closed #side { display: none; }
 .filter .n { color: var(--muted); font: 12px var(--mono); }
 .filter[aria-pressed="false"] { color: var(--muted); }
 .filter[aria-pressed="false"] .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+.snap-fit { display: block; width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
+.snap-btn { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; border-radius: 6px; }
+.snap-thumb { display: block; width: 96px; height: 96px; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
+.snap-cap { color: var(--muted); font-size: 12.5px; margin: 8px 6px; }
+.snap-save { display: inline-block; margin: 0 6px; font-size: 12.5px; color: var(--ink); text-decoration: underline; }
+.hand .snap-cap, .hand .snap-save { margin-left: 0; margin-right: 0; }
+#lightbox { position: fixed; inset: 0; z-index: 25; display: none; align-items: center; justify-content: center; background: rgba(5, 8, 12, 0.82); padding: 16px; }
+#lightbox.open { display: flex; animation: fadeIn .12s ease-out; }
+#lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; background: #fff; border-radius: 6px; cursor: zoom-out; }
+#lightbox .lb-close { position: absolute; top: 12px; right: 12px; }
 .empty-note { color: var(--muted); padding: 4px 6px; font-size: 12.5px; }
 .search-wrap { position: relative; margin: 0 6px 8px; }
 #search {
@@ -432,6 +442,9 @@ body.preload * { transition: none !important; animation: none !important; }
   <button class="act" type="button" data-view="search" aria-label="Search" title="Search">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
   </button>
+  <button class="act" type="button" data-view="snapshot" aria-label="Snapshot: one image of this chat" title="Snapshot">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.4"/></svg>
+  </button>
   <span class="act-spacer"></span>
   <button id="actPanel" class="act" type="button" aria-label="Toggle panel: session tape, tokens, problems (Ctrl+J)" title="Panel (Ctrl+J)">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 14h17"/></svg>
@@ -454,6 +467,10 @@ body.preload * { transition: none !important; animation: none !important; }
   <section id="view-tokens" class="view hidden">
     <div class="view-head"><h2 id="tokens">Tokens</h2><span id="tokSub" class="sub"></span></div>
     <div class="view-body"><div id="tokBody"></div></div>
+  </section>
+  <section id="view-snapshot" class="view hidden">
+    <div class="view-head"><h2>Snapshot</h2></div>
+    <div class="view-body"><div id="snapBody"></div></div>
   </section>
   <section id="view-search" class="view hidden">
     <div class="view-head"><h2>Search</h2></div>
@@ -567,6 +584,12 @@ body.preload * { transition: none !important; animation: none !important; }
 </div>
 
 <footer id="status" aria-label="Status bar"></footer>
+
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="Snapshot, full size">
+  <button id="lbClose" class="icon-btn lb-close" type="button" aria-label="Close snapshot (Esc)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+</div>
 
 <div id="paletteWrap">
   <div id="palette" class="glass" role="dialog" aria-modal="true" aria-label="Command palette">
@@ -1749,6 +1772,7 @@ const DATA = /*__MEMORY_DATA__*/null;
       if (k === 'j') { e.preventDefault(); togglePanel(); return; }
       if (k === 'i') { e.preventDefault(); toggleInspector(); return; }
     }
+    if (lbOpen()) { if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); } else if (e.key === 'Tab') { e.preventDefault(); $('lbClose').focus(); } return; }
     if (paletteOpen()) return; // the palette handles its own keys
     if (e.target === tapeCanvas && tapeKey(e)) { e.preventDefault(); return; }
     if (e.key === 'Escape') {
@@ -1827,7 +1851,7 @@ const DATA = /*__MEMORY_DATA__*/null;
   let sideView = 'explorer';
   function showView(name, focus) {
     sideView = name;
-    for (const v of ['explorer', 'brief', 'tokens', 'search']) $('view-' + v).classList.toggle('hidden', v !== name);
+    for (const v of ['explorer', 'brief', 'tokens', 'snapshot', 'search']) $('view-' + v).classList.toggle('hidden', v !== name);
     for (const b of doc.querySelectorAll('.act[data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === name && !body.contains('side-closed')));
     if (focus && name === 'search') setTimeout(() => searchInput.focus(), 0);
   }
@@ -2045,6 +2069,57 @@ const DATA = /*__MEMORY_DATA__*/null;
     for (const b of $('sessions').querySelectorAll('.row')) b.classList.toggle('current', !!selected && b.dataset.sid === selected.id);
   }
 
+  // ------------------------------------------------------------------ snapshot: the one-image summary (side view + viewer)
+  const SNAP = (DATA.snapshot && typeof DATA.snapshot === 'object') ? DATA.snapshot : { available: false, reason: 'nothing-to-draw' };
+  if (!(SNAP.available && typeof SNAP.data_uri === 'string' && SNAP.data_uri.indexOf('data:image/png;base64,') === 0)) SNAP.available = false;
+  let lbReturn = null;
+  const lbOpen = () => $('lightbox').classList.contains('open');
+  function openLightbox(from) {
+    if (!SNAP.available) return;
+    lbReturn = from || doc.activeElement;
+    const big = el('img');
+    big.id = 'lbImg';
+    big.alt = "One image of this chat's history, full size";
+    big.src = SNAP.data_uri;
+    const old = $('lbImg');
+    if (old) old.remove();
+    $('lightbox').append(big);
+    $('lightbox').classList.add('open');
+    $('lbClose').focus();
+  }
+  function closeLightbox() {
+    $('lightbox').classList.remove('open');
+    const big = $('lbImg');
+    if (big) big.remove();
+    if (lbReturn && lbReturn.focus && doc.contains(lbReturn)) lbReturn.focus({ preventScroll: true });
+  }
+  $('lbClose').addEventListener('click', closeLightbox);
+  $('lightbox').addEventListener('click', closeLightbox);
+  function renderSnapshot() {
+    const box = $('snapBody');
+    box.replaceChildren();
+    if (!SNAP.available) {
+      box.append(el('div', 'empty-note', SNAP.reason === 'pillow-missing'
+        ? 'Install Pillow to make the snapshot: pip install pillow'
+        : 'Nothing to draw yet \u2014 work a little and reopen the map'));
+      return;
+    }
+    const open = el('button', 'snap-btn');
+    open.type = 'button';
+    open.setAttribute('aria-label', 'Open snapshot full size');
+    const img = el('img', 'snap-fit');
+    img.alt = 'One image of this chat\'s history';
+    img.src = SNAP.data_uri;
+    open.append(img);
+    open.addEventListener('click', () => openLightbox(open));
+    box.append(open);
+    box.append(el('div', 'snap-cap', 'One image of this chat\'s history \u00b7 about ' + fmtInt(SNAP.tokens) + ' tokens \u00b7 built ' + String(SNAP.built || '')));
+    const a = el('a', 'snap-save', 'Save image');
+    a.setAttribute('download', 'memory.png');
+    a.setAttribute('href', SNAP.data_uri);
+    box.append(a);
+  }
+
   // ------------------------------------------------------------------ where you left off (side view + inspector empty state)
   const packPath = String(DATA.pack_path || '');
   function clearSteps() {
@@ -2097,6 +2172,20 @@ const DATA = /*__MEMORY_DATA__*/null;
       const k = el('div', 'brief-block');
       k.append(el('div', 'k', 'Resume pack'));
       box.append(k, el('div', 'path', packPath));
+    }
+    if (box.id === 'handBrief' && SNAP.available) {
+      const k = el('div', 'brief-block');
+      k.append(el('div', 'k', 'Snapshot'));
+      const tb = el('button', 'snap-btn');
+      tb.type = 'button';
+      tb.setAttribute('aria-label', 'Open snapshot');
+      const im = el('img', 'snap-thumb');
+      im.alt = 'Thumbnail of the snapshot';
+      im.src = SNAP.data_uri;
+      tb.append(im);
+      tb.addEventListener('click', () => openLightbox(tb));
+      k.append(tb);
+      box.append(k);
     }
     const act = el('div', 'actions');
     const b1 = el('button', 'btn', 'Copy /clear steps');
@@ -2705,6 +2794,8 @@ const DATA = /*__MEMORY_DATA__*/null;
     { label: 'View: Explorer', run: () => { sideView = 'explorer'; setSide(true); } },
     { label: 'View: Where you left off', run: () => { sideView = 'brief'; setSide(true); } },
     { label: 'View: Tokens', run: () => { sideView = 'tokens'; setSide(true); } },
+    { label: 'View: Snapshot', run: () => { sideView = 'snapshot'; setSide(true); } },
+    { label: 'Open snapshot', run: () => { if (SNAP.available) openLightbox(null); else { sideView = 'snapshot'; setSide(true); } } },
     { label: 'View: Search', run: () => { sideView = 'search'; setSide(true); showView('search', true); } },
     { label: 'Panel: Session tape', run: () => setPanel(true, 'tape') },
     { label: 'Panel: Tokens', run: () => setPanel(true, 'tokens') },
@@ -3014,6 +3105,7 @@ const DATA = /*__MEMORY_DATA__*/null;
   renderRange();
   renderChips();
   renderBrief();
+  renderSnapshot();
   renderSessions();
   renderTokens();
   renderTokenTables();

@@ -1,7 +1,9 @@
 """Render the memory graph as a self-contained, offline 3D map (one HTML file)."""
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -10,6 +12,7 @@ from pathlib import Path
 from memgraph.brief import display_path, where_things_stand
 from memgraph.graph import Graph
 from memgraph.pack import PACK_FILE
+from memgraph.visual import IMAGE_FILE, IMAGE_SIZE, has_story, render_visual_pack
 
 TEMPLATE_PATH = Path(__file__).with_name("viewer_template.html")
 PLACEHOLDER = "/*__MEMORY_DATA__*/null"
@@ -32,8 +35,32 @@ def _label(node: dict, project_root: Path | None) -> str:
     return label[:_MAX_LABEL]
 
 
+IMAGE_TOKENS = round(IMAGE_SIZE[0] * IMAGE_SIZE[1] / 750)  # 1590
+
+_log = logging.getLogger(__name__)
+
+
+def _no_snapshot(reason: str | None) -> dict:
+    return {"available": False, "data_uri": None, "tokens": IMAGE_TOKENS, "built": "", "reason": reason}
+
+
+def snapshot_view(graph: Graph, mem_dir: Path, project_root: Path | None = None) -> dict:
+    """Render a fresh visual pack into `mem_dir` and describe it for the page; never raises."""
+    try:
+        target = Path(mem_dir) / IMAGE_FILE
+        png = render_visual_pack(graph, target, project_root)
+        if png is None:
+            return _no_snapshot("nothing-to-draw" if not has_story(graph) else "pillow-missing")
+        data = base64.b64encode(Path(png).read_bytes()).decode("ascii")
+        return {"available": True, "data_uri": "data:image/png;base64," + data, "tokens": IMAGE_TOKENS,
+                "built": datetime.now().strftime("%Y-%m-%d %H:%M"), "reason": None}
+    except Exception:  # the map must still draw
+        _log.exception("snapshot render failed")
+        return _no_snapshot(None)
+
+
 def build_view_data(graph: Graph, project_name: str, project_root: Path | None = None,
-                    tokens: dict | None = None, pack_path: str = "") -> dict:
+                    tokens: dict | None = None, pack_path: str = "", snapshot: dict | None = None) -> dict:
     """The plain JSON-able data the map page draws (`tokens` from savings.token_view).
 
     The session tape inside `tokens` is lifted to the top-level `tape` key."""
@@ -85,6 +112,7 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
         "tokens": tokens,
         "tape": tape,
         "pack_path": _text(pack_path),
+        "snapshot": snapshot if isinstance(snapshot, dict) else _no_snapshot("nothing-to-draw"),
     }
 
 
@@ -96,10 +124,10 @@ def _script_json(data: dict) -> str:
 
 
 def render_map(graph: Graph, project_name: str, project_root: Path | None = None,
-               tokens: dict | None = None, pack_path: str = "") -> str:
+               tokens: dict | None = None, pack_path: str = "", snapshot: dict | None = None) -> str:
     """The whole map page as one HTML string, with the data embedded."""
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    payload = _script_json(build_view_data(graph, project_name, project_root, tokens, pack_path))
+    payload = _script_json(build_view_data(graph, project_name, project_root, tokens, pack_path, snapshot))
     return template.replace(PLACEHOLDER, payload, 1)
 
 
@@ -109,7 +137,8 @@ def write_map(graph: Graph, mem_dir: Path, project_name: str, project_root: Path
     path = Path(mem_dir) / MAP_FILE
     pack = Path(mem_dir) / PACK_FILE
     pack_path = (display_path(str(pack), project_root) or str(pack)) if pack.is_file() else ""
-    html = render_map(graph, project_name, project_root, tokens, pack_path)
+    snapshot = snapshot_view(graph, Path(mem_dir), project_root)
+    html = render_map(graph, project_name, project_root, tokens, pack_path, snapshot)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:

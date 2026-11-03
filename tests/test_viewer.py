@@ -96,7 +96,7 @@ def test_write_map_atomic_and_path(tmp_path):
     path = write_map(graph_from_fixture(), mem, "p")
     assert path == mem / "memory-map.html"
     assert path.exists() and "Add login page to the app" in path.read_text(encoding="utf-8")
-    assert [p.name for p in mem.iterdir()] == ["memory-map.html"]
+    assert not [p for p in mem.iterdir() if p.suffix == ".tmp"]
 
 
 def test_page_script_is_valid_javascript(tmp_path):
@@ -270,3 +270,64 @@ def test_page_has_devtool_shell():
     assert "backdrop-filter" in html and "@supports" in html  # glass with a solid fallback
     assert "prefers-reduced-motion" in html and ":focus-visible" in html
     assert "text-transform: uppercase" not in html and "@font-face" not in html and "@import" not in html
+
+
+# ---- snapshot (visual pack on the map page) ----
+
+def _story_graph():
+    g = Graph()
+    g.add_node("task", "t1", "Add login page to the app", "2026-11-01T10:00:00Z")
+    return g
+
+
+def test_view_data_snapshot_available(tmp_path):
+    pytest.importorskip("PIL")
+    from memgraph.viewer import snapshot_view
+    import base64
+
+    snap = snapshot_view(_story_graph(), tmp_path, None)
+    assert snap["available"] is True and snap["reason"] is None
+    assert snap["tokens"] == 1590 and snap["built"]
+    prefix = "data:image/png;base64,"
+    assert snap["data_uri"].startswith(prefix)
+    assert base64.b64decode(snap["data_uri"][len(prefix):])[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(snap["data_uri"]) < 400_000
+
+
+def test_view_data_snapshot_unavailable_reasons(tmp_path, monkeypatch):
+    import memgraph.viewer as viewer
+
+    monkeypatch.setattr(viewer, "render_visual_pack", lambda *a, **k: None)
+    snap = viewer.snapshot_view(Graph(), tmp_path, None)
+    assert snap == {"available": False, "data_uri": None, "tokens": 1590, "built": "", "reason": "nothing-to-draw"}
+    monkeypatch.setattr(viewer, "has_story", lambda g: True)
+    assert viewer.snapshot_view(_story_graph(), tmp_path, None)["reason"] == "pillow-missing"
+
+
+def test_snapshot_render_failure_never_breaks_map(tmp_path, monkeypatch):
+    import memgraph.viewer as viewer
+
+    def boom(*a, **k):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(viewer, "render_visual_pack", boom)
+    monkeypatch.setattr(viewer, "has_story", lambda g: True)
+    path = write_map(_story_graph(), tmp_path, "p")
+    snap = embedded_data(path.read_text(encoding="utf-8"))["snapshot"]
+    assert snap["available"] is False and snap["data_uri"] is None
+
+
+def test_build_view_data_defaults_snapshot_unavailable():
+    snap = build_view_data(Graph(), "p")["snapshot"]
+    assert snap["available"] is False and snap["data_uri"] is None
+
+
+def test_page_has_snapshot_view():
+    html = render_map(graph_from_fixture(), "p")
+    for marker in ('data-view="snapshot"', 'id="view-snapshot"', "'download', 'memory.png'", "Open snapshot",
+                   "Save image", "One image of this chat", "Install Pillow to make the snapshot",
+                   "Nothing to draw yet", 'id="lightbox"'):
+        assert marker in html
+    assert html.count("/*__MEMORY_DATA__*/null") == 0
+    assert "http://" not in html and "https://" not in html
+    assert CSP in html

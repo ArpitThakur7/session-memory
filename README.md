@@ -29,6 +29,7 @@ The memory folder ignores itself in git: the plugin writes a `.gitignore` contai
 - `/remember <decision>` saves one line, "decision because reason", to project memory. Use it for the "why" behind choices.
 - `/recall <word>` searches project memory for older details that are not in the brief.
 - `/memory-map` opens a 3D map of the project's memory (see below).
+- `/memory-snapshot` makes a one-image summary of this project's chat history (about 1,590 tokens). The next chat can read it after `/clear`. Needs Pillow (`pip install pillow`).
 
 ## See your memory
 
@@ -36,7 +37,7 @@ The memory folder ignores itself in git: the plugin writes a `.gitignore` contai
 
 - Drag to rotate, scroll or pinch to zoom, right-drag (or Shift-drag) to pan, double-click empty space to fit everything.
 - Each session is a gray dot, with its requests around it. Click a dot to open it: its files, commands, errors and decisions burst out of it, and the side panel shows its full text, when it was seen and what it is connected to. Click it again to fold it back up. A "+N" badge means there is more inside. A dashed ring stands for "+K more", and clicking it shows the rest.
-- Search covers everything, including folded-up parts: click a result to fly to it. The colored chips hide or show a kind of item. "Where you left off" repeats the brief.
+- Search covers everything, including folded-up parts: click a result to fly to it. The colored chips hide or show a kind of item. "Where you left off" repeats the brief. The Snapshot view shows the one-image summary (`memory.png`, redrawn each time the map is built), opens it full size on click and has a "Save image" link; it needs Pillow.
 
 The page is one self-contained file, `.claude/session-memory/memory-map.html`. It loads nothing from the network and is git-ignored like the rest of the memory folder. Run the command again to refresh it.
 
