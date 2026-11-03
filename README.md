@@ -2,6 +2,35 @@
 
 A free Claude Code plugin that keeps a small memory of your project, so you can start a fresh chat instead of resuming a huge one.
 
+> **Unofficial.** session-memory is a community project. It is not made, endorsed or supported by Anthropic, and is not affiliated with Anthropic.
+
+## What it does
+
+- **Memory graph at 0 model tokens.** Plain Python reads Claude Code's local transcripts and keeps a small graph of your requests, files, commands, errors, todos and decisions.
+- **Startup brief.** Each new or cleared session starts with a short summary of where you left off.
+- **Resume packs and a one-image snapshot.** Bigger summaries, as text or as one picture, when you need more than the brief.
+- **Cache-expiry watcher and guard.** A desktop notification before the prompt cache expires, and a one-time warning before an expensive resume.
+- **MCP server.** The same memory for VS Code, Antigravity and other MCP clients.
+- **Token counter.** Exact token use and measured savings from your transcripts.
+- **3D memory map.** A self-contained page to explore the memory.
+
+Everything runs on your machine; nothing is sent anywhere (see [Privacy](#privacy)).
+
+## Quick install
+
+You need Python 3.10 or newer on your PATH. In Claude Code, add this repository as a plugin marketplace and install the plugin:
+
+```
+/plugin marketplace add ArpitThakur7/session-memory
+/plugin install session-memory@session-memory
+```
+
+Or, from a local checkout, start Claude Code with the plugin loaded:
+
+```
+claude --plugin-dir <path to this repo>
+```
+
 ## Why it exists
 
 Built to fix a restart-cost problem. After a usage-limit reset, or after an hour of idle time, continuing a long Claude Code chat re-sends the whole history at full price, because the prompt cache has expired. In the author's own use, one such restart cost roughly 20-30% of a weekly limit.
@@ -14,14 +43,20 @@ session-memory does three things:
 
 ## Install
 
-You need Python 3.10 or newer on your PATH. Then start Claude Code with the plugin loaded:
+You need Python 3.10 or newer on your PATH. Install from the marketplace:
+
+```
+/plugin marketplace add ArpitThakur7/session-memory
+/plugin install session-memory@session-memory
+```
+
+Or start Claude Code with the plugin loaded from a local checkout:
 
 ```
 claude --plugin-dir <path to this repo>
 ```
 
-(A marketplace entry may come later.) No other setup is needed; the hooks start working immediately.
-
+No other setup is needed; the hooks start working immediately.
 The memory folder ignores itself in git: the plugin writes a `.gitignore` containing `*` inside `.claude/session-memory/`, so the graph (which holds your prompts, commands and errors) is not committed by accident.
 
 ## Commands
@@ -194,6 +229,7 @@ Everything is under `<project>/.claude/session-memory/`:
 - `watch.json` - the cache watcher's deadline, warning time and which deadline was already announced
 - `watch.lock` - the running cache watcher's process id, so only one watcher runs per project
 - `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command, the cache watcher, and, for `resume-pack.md`, each new session)
+- `memory-map.html` - the 3D memory map page (made by `/memory-map` or the `map` command)
 - `error.log` - any internal errors (the plugin never blocks your work if it fails)
 - `.gitignore` - contains `*`, so none of the above is committed
 
@@ -258,9 +294,31 @@ The live test needs an interactive Claude Code session and spends usage limit, s
 - **Nothing is zero tokens.** Building the graph costs none, but the brief itself is read by the model every session. It is capped at 9,500 characters (about 2,400 tokens), below Claude Code's 10,000-character limit for hook context.
 - The cache guard uses an idle-time estimate, not a real view of Anthropic's cache, so it can be wrong in either direction.
 
+## Privacy
+
+- **Everything is local.** The plugin makes no network requests. Building the memory, the brief, the packs, the map and the token counts is plain Python on your machine.
+- **What it reads:** Claude Code's transcript files for the current project (`~/.claude/projects/<project folder>/`, including helper-agent transcripts) and the hook input Claude Code passes on stdin.
+- **What it writes:** only files in `<your project>/.claude/session-memory/` (listed in [Where data is stored](#where-data-is-stored)). That folder ignores itself in git.
+- **Secrets are hidden** with `[hidden]` before anything is stored. The filter is best-effort, so treat the memory folder as private, like the transcripts themselves. Memory built before 0.2.0 is not rewritten: delete `graph.json` and `state.json` to rebuild it.
+- **The transcript format is not a public API.** Claude Code may change it at any time, which can break or change what the plugin reads until it is updated.
+
+See `SECURITY.md` for how to report a security problem.
+
 ## Credits
 
-No code was copied from other projects. These were studied for ideas: the official MCP Memory server (modelcontextprotocol/servers), claude-mem (docs.claude-mem.ai), Cognee's Claude Code plugin (docs.cognee.ai), CodeLoupe (github.com/Terrio-cz/CodeLoupe) and Serena. Rule for this project: code from MIT, Apache or BSD projects may be reused only with its license notice; GPL or AGPL projects are used for ideas only.
+No code was copied from other projects; these were inspiration only:
+
+- [claude-mem](https://github.com/thedotmack/claude-mem), memory for Claude Code sessions.
+- [ccusage](https://github.com/ryoppippi/ccusage), token usage from Claude Code's local transcripts.
+- The official [MCP memory server](https://github.com/modelcontextprotocol/servers/tree/main/src/memory), a knowledge-graph memory over MCP.
+
+Also studied for ideas: Cognee's Claude Code plugin (docs.cognee.ai), CodeLoupe (github.com/Terrio-cz/CodeLoupe) and Serena. Rule for this project: code from MIT, Apache or BSD projects may be reused only with its license notice; GPL or AGPL projects are used for ideas only.
+
+session-memory is unofficial and not affiliated with Anthropic. "Claude" and "Claude Code" are Anthropic's names for their products.
+
+## Contributing
+
+See `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` and `CHANGELOG.md`.
 
 ## License
 

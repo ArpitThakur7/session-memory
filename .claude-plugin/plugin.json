@@ -1,6 +1,12 @@
 {
   "name": "session-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero-token project memory graph, cache guard and short startup brief for Claude Code",
-  "license": "MIT"
+  "author": {
+    "name": "ArpitThakur7"
+  },
+  "repository": "https://github.com/ArpitThakur7/session-memory",
+  "homepage": "https://github.com/ArpitThakur7/session-memory",
+  "license": "MIT",
+  "keywords": ["memory", "context", "resume", "prompt-cache", "tokens", "mcp", "transcripts", "local"]
 }

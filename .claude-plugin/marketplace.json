@@ -1,0 +1,13 @@
+{
+  "name": "session-memory",
+  "owner": {
+    "name": "ArpitThakur7"
+  },
+  "plugins": [
+    {
+      "name": "session-memory",
+      "source": "./",
+      "description": "Local project memory from your Claude Code transcripts (0 model tokens): startup brief, resume packs, cache-expiry watcher, MCP server, token counter and 3D memory map."
+    }
+  ]
+}
