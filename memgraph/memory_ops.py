@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from memgraph.graph import Graph, _digest
+from memgraph.redact import redact
 
 RECALL_MAX_CHARS = 2000
 REMEMBER_MAX_CHARS = 1000
@@ -30,6 +31,7 @@ def recall_lines(graph: Graph, query: str) -> list[str]:
 def remember(graph: Graph, text: str, now: datetime) -> None:
     """Add a decision node (linked to the current task if known). Caller saves the graph."""
     ts = now.isoformat()
+    text = redact(text)
     decision = graph.add_node("decision", _digest(text), text, ts)
     last_prompt = graph.meta.get("last_prompt")
     if isinstance(last_prompt, dict):

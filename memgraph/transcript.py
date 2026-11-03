@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
+from memgraph.redact import redact
+
 _MAX_TEXT = 200
 _MAX_REPLY = 600
+# Secrets are hidden in this much of a text before it is cut to its stored length, so a
+# secret that straddles the cut is never kept in part. Longer texts are cut first (speed).
+_REDACT_SPAN = 4000
 _INTERRUPTED = "[Request interrupted by user"
 _HARNESS_ERROR = "<tool_use_error>"
 _TITLE_FIELDS = {"custom-title": ("customTitle", "custom"), "ai-title": ("aiTitle", "ai")}
@@ -99,9 +104,21 @@ def _blocks(content) -> list[dict]:
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
 
+def _safe(text, limit: int | None = None) -> str:
+    """Text as it may be stored: secrets hidden (memgraph.redact), then cut to `limit`."""
+    text = redact(str(text or "")[:_REDACT_SPAN])
+    return text if limit is None else text[:limit]
+
+
+def _safe_path(path):
+    """A file path with secrets hidden; None stays None."""
+    return _safe(path) if isinstance(path, str) else path
+
+
 def _todo_items(raw) -> list[dict]:
     return [
-        {"content": t.get("content"), "status": t.get("status")}
+        {"content": _safe(t.get("content")) if isinstance(t.get("content"), str) else t.get("content"),
+         "status": t.get("status")}
         for t in raw
         if isinstance(t, dict)
     ]
@@ -114,11 +131,11 @@ def _tool_use_event(block: dict, ts: str, session: str) -> Event | None:
         inp = {}
     if name in _EDIT_TOOLS:
         path = inp.get("file_path") or inp.get("notebook_path")
-        return Event("edit", ts, session, {"path": path, "id": block.get("id")})
+        return Event("edit", ts, session, {"path": _safe_path(path), "id": block.get("id")})
     if name == "Read":
-        return Event("read", ts, session, {"path": inp.get("file_path"), "id": block.get("id")})
+        return Event("read", ts, session, {"path": _safe_path(inp.get("file_path")), "id": block.get("id")})
     if name in _COMMAND_TOOLS:
-        cmd = str(inp.get("command") or "")[:_MAX_TEXT]
+        cmd = _safe(inp.get("command"), _MAX_TEXT)
         return Event("command", ts, session, {"cmd": cmd, "id": block.get("id")})
     if name == "TodoWrite" and isinstance(inp.get("todos"), list):
         return Event("todo", ts, session, {"items": _todo_items(inp["todos"])})
@@ -151,14 +168,14 @@ def _parse_user(msg: dict, obj: dict, ts: str, session: str) -> list[Event]:
                 and not raw.startswith(_INTERRUPTED):
             text = clean_prompt(raw)
             if text:
-                events.append(Event("prompt", ts, session, {"text": text[:_MAX_TEXT]}))
+                events.append(Event("prompt", ts, session, {"text": _safe(text, _MAX_TEXT)}))
     for block in _blocks(content):
         if block.get("type") == "tool_result" and block.get("is_error") is True:
             text = _text_of(block.get("content"))
             if _is_rejection(text) or text.lstrip().startswith(_HARNESS_ERROR):
                 continue  # declined by the user, or Claude misusing a tool: not project work
             events.append(
-                Event("error", ts, session, {"text": text[:_MAX_TEXT], "tool_use_id": block.get("tool_use_id")})
+                Event("error", ts, session, {"text": _safe(text, _MAX_TEXT), "tool_use_id": block.get("tool_use_id")})
             )
     return events
 
@@ -202,7 +219,7 @@ def _parse_assistant(msg: dict, obj: dict, ts: str, session: str) -> list[Event]
             reply = block["text"].strip()
     synthetic = is_synthetic(obj)
     if reply and not synthetic:
-        events.append(Event("reply", ts, session, {"text": reply[:_MAX_REPLY]}))
+        events.append(Event("reply", ts, session, {"text": _safe(reply, _MAX_REPLY)}))
     usage = msg.get("usage")
     if isinstance(usage, dict) and not synthetic:
         context = sum(usage.get(k) or 0 for k in _CONTEXT_FIELDS)
@@ -231,7 +248,7 @@ def _parse_obj(obj: dict) -> list[Event]:
         title = obj.get(field)
         if isinstance(title, str) and title.strip():
             return [Event("title", obj.get("timestamp"), obj.get("sessionId"),
-                          {"text": title.strip()[:_MAX_TEXT], "source": source})]
+                          {"text": _safe(title.strip(), _MAX_TEXT), "source": source})]
         return []
     msg = obj.get("message")
     if not isinstance(msg, dict):

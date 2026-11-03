@@ -199,6 +199,10 @@ Everything is under `<project>/.claude/session-memory/`:
 
 Nothing leaves your machine. Delete the folder to reset the memory.
 
+**Secrets are hidden before they are stored.** Prompts, commands, error text, file paths, replies, todos, titles and `/remember` notes go through a redaction filter first (`memgraph/redact.py`). API keys (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe), JWTs, private-key blocks, `Bearer`/`Authorization` values, passwords in URLs, `--password`/`--token`/`--api-key` values and `NAME=value` settings whose name contains KEY, TOKEN, SECRET, PASSWORD, PASSWD or CREDENTIAL are replaced with `[hidden]`. It is a best-effort filter: it cannot recognise every kind of secret.
+
+**Upgrading from 0.1.0:** an existing memory is not rewritten. To hide secrets in old entries, rebuild the memory: delete `graph.json` and `state.json` in `.claude/session-memory/`. The next reply rebuilds both from your transcripts, with redaction.
+
 ## Benchmark
 
 `python bench/measure.py <transcripts_dir>` compares, for each transcript, the context size Claude Code recorded on its newest reply (what a resume would re-send) with the estimated size of the brief built from that transcript alone (characters / 4). Run on the author's local transcripts, every project folder under `~/.claude/projects` whose name starts with `C--Users-admin-Desktop-` (one folder had no transcripts and is left out):
