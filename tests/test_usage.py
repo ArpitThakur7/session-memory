@@ -1,5 +1,7 @@
 import json
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -127,6 +129,7 @@ def test_transcripts_dir_from_state_or_slug(tmp_path, monkeypatch):
     assert usage.transcripts_dir_for(project, mem) == tmp_path / "t"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="a drive-letter path is only absolute on Windows")
 def test_project_slug_is_ascii_only():
     from pathlib import PureWindowsPath
 
@@ -135,3 +138,8 @@ def test_project_slug_is_ascii_only():
             return self
 
     assert usage.project_slug(FakePath(r"C:\Users\José\proj_é")) == "C--Users-Jos--proj--"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX path form")
+def test_project_slug_is_ascii_only_posix():
+    assert usage.project_slug(Path("/home/José/proj_é")) == "-home-Jos--proj--"
