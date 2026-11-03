@@ -205,19 +205,19 @@ Nothing leaves your machine. Delete the folder to reset the memory.
 
 ## Benchmark
 
-`python bench/measure.py <transcripts_dir>` compares, for each transcript, the context size Claude Code recorded on its newest reply (what a resume would re-send) with the estimated size of the brief built from that transcript alone (characters / 4). Run on the author's local transcripts, every project folder under `~/.claude/projects` whose name starts with `C--Users-admin-Desktop-` (one folder had no transcripts and is left out):
+`python bench/measure.py <transcripts_dir>` compares, for each transcript, the context size Claude Code recorded on its newest reply (what a resume would re-send) with the estimated size of the brief built from that transcript alone (characters / 4). Run on the author's local transcripts from four of their own projects (one project folder had no transcripts and is left out; project names are replaced with letters):
 
-| project folder | session | history tokens | brief tokens | saved % |
-|---|---|---:|---:|---:|
-| CalcVault | fbeac537-5818-4897-ae1a-0f242c948eaf.jsonl | 86270 | 933 | 98.9 |
-| JOB-PREDICTION | 19342041-33a9-4a50-9918-a8156435415c.jsonl | 549671 | 810 | 99.9 |
-| JOB-PREDICTION | e46aa26e-c223-4690-97ad-653b7c605f3b.jsonl | 326085 | 775 | 99.8 |
-| JOB-PREDICTION | 51cfe12e-3da9-4d2e-b662-15f054945ac2.jsonl | 17981 | 246 | 98.6 |
-| JOB-PREDICTION (worktree) | cfd1b0af-e75d-4671-8f88-8dee8da2ed87.jsonl | 70705 | 174 | 99.8 |
-| RepoQuest | af0934d1-91c1-4909-87f6-f027c2fb3721.jsonl | 188500 | 361 | 99.8 |
-| Sql-bot | 979c499b-b5d3-4689-86de-264081666608.jsonl | 707427 | 845 | 99.9 |
-| Sql-bot | b6918e82-2d01-4895-9870-c5dcbdfcec84.jsonl | 407675 | 712 | 99.8 |
-| Sql-bot | 1774b924-82ca-4ce7-90ff-29571f146622.jsonl | 84554 | 161 | 99.8 |
+| project | history tokens | brief tokens | saved % |
+|---|---:|---:|---:|
+| Project A | 86270 | 933 | 98.9 |
+| Project B | 549671 | 810 | 99.9 |
+| Project B | 326085 | 775 | 99.8 |
+| Project B | 17981 | 246 | 98.6 |
+| Project B (worktree) | 70705 | 174 | 99.8 |
+| Project C | 188500 | 361 | 99.8 |
+| Project D | 707427 | 845 | 99.9 |
+| Project D | 407675 | 712 | 99.8 |
+| Project D | 84554 | 161 | 99.8 |
 
 These are 9 sessions from one person, so treat them as examples, not an average. The brief's size depends on how much work a session recorded (todos, edited files, errors, `/remember` notes): here it ranged from 161 to 933 tokens, and it can grow to the 9,500-character cap (about 2,400 tokens) in a busy project. The saving is largest for long chats; for a short chat a resume is cheap anyway. The brief carries a summary, not the full conversation, so it is smaller than the history by design. What it loses is the detail, which is why `/recall` and `/remember` exist.
 

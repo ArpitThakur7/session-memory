@@ -45,7 +45,7 @@ B40 = "0123456789abcdefABCDEF0123456789abcdefAB"  # 40 chars
     ("Bearer abcdef0123456789", f"Bearer {H}"),
     # URL credentials: only the password goes
     ("git clone https://me:s3cretPass@github.com/x/y.git", f"git clone https://me:{H}@github.com/x/y.git"),
-    ("postgres://admin:hunter2@db:5432/app", f"postgres://admin:{H}@db:5432/app"),
+    ("postgres://app:hunter2@db:5432/app", f"postgres://app:{H}@db:5432/app"),
     # CLI flags
     ("mysql --password=hunter2 db", f"mysql --password={H} db"),
     ("tool --token abc123 run", f"tool --token {H} run"),

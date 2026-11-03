@@ -496,11 +496,11 @@ def test_measure_fixture(tmp_path):
 ```
 
 - [ ] **Step 2: Run, implement `bench/measure.py`, run again.** Expected: FAIL, then PASS.
-- [ ] **Step 3: Live test in Claude Code:** `claude --plugin-dir <this repo>` inside a real project (for example `C:\Users\admin\Desktop\RepoQuest`). Check:
+- [ ] **Step 3: Live test in Claude Code:** `claude --plugin-dir <this repo>` inside a real project (for example `<your project>`). Check:
   1. After one reply, `.claude/session-memory/graph.json` exists.
   2. `/clear` → the new session's first answer knows the last request and next steps.
   3. Set `SESSION_MEMORY_IDLE_MIN=0` and `SESSION_MEMORY_MIN_TOKENS=1000`, then send a message: the guard blocks it. Send it again: it goes through.
-- [ ] **Step 4: Run** `python bench/measure.py "%USERPROFILE%\.claude\projects\C--Users-admin-Desktop-RepoQuest"` and paste the table into `README.md`.
+- [ ] **Step 4: Run** `python bench/measure.py "%USERPROFILE%\.claude\projects\<your project folder>"` and paste the table into `README.md`.
 - [ ] **Step 5: Continuity check (spec success criterion):** do 10 `/clear` resumes during real work. Record in `README.md` how many times the first answer named the current task and next step correctly. Target: at least 9 of 10.
 - [ ] **Step 6: Write `README.md`:** what it does, install (`claude --plugin-dir`, or a marketplace entry later), configuration env vars, where data is stored (add `.claude/session-memory/` to `.gitignore`), the benchmark table, credits for open-source projects used (spec section "Use of open-source projects"), and limits (transcript format is not a public API).
 - [ ] **Step 7: Commit** `git commit -m "docs: benchmark and README"`

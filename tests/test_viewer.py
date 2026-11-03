@@ -23,9 +23,9 @@ def embedded_data(html: str):
 
 def test_build_view_data_shape():
     g = graph_from_fixture()
-    data = build_view_data(g, "RepoQuest")
+    data = build_view_data(g, "demo-project")
     assert set(data) >= {"project", "generated", "nodes", "edges", "sessions", "brief"}
-    assert data["project"] == "RepoQuest"
+    assert data["project"] == "demo-project"
     assert len(data["nodes"]) == len(g.nodes)
     node = data["nodes"][0]
     assert set(node) >= {"id", "kind", "label", "count", "first", "last"}
@@ -122,7 +122,7 @@ def test_where_things_stand_only_from_last_requests_session():
 
 
 def test_page_has_time_range_picker():
-    html = render_map(graph_from_fixture(), "RepoQuest")
+    html = render_map(graph_from_fixture(), "demo-project")
     for label in ("1 hour", "5 hours", "1 day", "7 days", "All time", "Time range"):
         assert label in html
 
