@@ -235,3 +235,18 @@ def test_view_data_tape_degrades_without_transcripts(tmp_path):
     missing = token_view(tmp_path / "nope", tmp_path)
     data = build_view_data(graph_from_fixture(), "p", tokens=missing)
     assert data["tape"] == {"available": False, "reason": missing["reason"]}
+
+
+def test_tape_counts_replies_per_main_session(tmp_path):
+    tape = _tape_tokens(tmp_path)["tape"]
+    assert tape["replies_by_session"] == {"session:old": 3, "session:new": 2}
+
+
+def test_view_data_pack_path_relative_to_project(tmp_path):
+    root = tmp_path / "proj"
+    mem = root / ".claude" / "session-memory"
+    mem.mkdir(parents=True)
+    assert build_view_data(graph_from_fixture(), "p", root)["pack_path"] == ""
+    (mem / "resume-pack.md").write_text("x", encoding="utf-8")
+    path = write_map(graph_from_fixture(), mem, "p", root)
+    assert embedded_data(path.read_text(encoding="utf-8"))["pack_path"] == ".claude/session-memory/resume-pack.md"

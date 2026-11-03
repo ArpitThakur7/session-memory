@@ -9,6 +9,7 @@ from pathlib import Path
 
 from memgraph.brief import display_path, where_things_stand
 from memgraph.graph import Graph
+from memgraph.pack import PACK_FILE
 
 TEMPLATE_PATH = Path(__file__).with_name("viewer_template.html")
 PLACEHOLDER = "/*__MEMORY_DATA__*/null"
@@ -32,7 +33,7 @@ def _label(node: dict, project_root: Path | None) -> str:
 
 
 def build_view_data(graph: Graph, project_name: str, project_root: Path | None = None,
-                    tokens: dict | None = None) -> dict:
+                    tokens: dict | None = None, pack_path: str = "") -> dict:
     """The plain JSON-able data the map page draws (`tokens` from savings.token_view).
 
     The session tape inside `tokens` is lifted to the top-level `tape` key."""
@@ -83,6 +84,7 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
                   "next_steps": next_steps},
         "tokens": tokens,
         "tape": tape,
+        "pack_path": _text(pack_path),
     }
 
 
@@ -94,10 +96,10 @@ def _script_json(data: dict) -> str:
 
 
 def render_map(graph: Graph, project_name: str, project_root: Path | None = None,
-               tokens: dict | None = None) -> str:
+               tokens: dict | None = None, pack_path: str = "") -> str:
     """The whole map page as one HTML string, with the data embedded."""
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    payload = _script_json(build_view_data(graph, project_name, project_root, tokens))
+    payload = _script_json(build_view_data(graph, project_name, project_root, tokens, pack_path))
     return template.replace(PLACEHOLDER, payload, 1)
 
 
@@ -105,7 +107,9 @@ def write_map(graph: Graph, mem_dir: Path, project_name: str, project_root: Path
               tokens: dict | None = None) -> Path:
     """Write the page to `mem_dir`/memory-map.html atomically and return its path."""
     path = Path(mem_dir) / MAP_FILE
-    html = render_map(graph, project_name, project_root, tokens)
+    pack = Path(mem_dir) / PACK_FILE
+    pack_path = (display_path(str(pack), project_root) or str(pack)) if pack.is_file() else ""
+    html = render_map(graph, project_name, project_root, tokens, pack_path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:

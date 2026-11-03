@@ -220,7 +220,8 @@ def tape_view(usage: UsageResult, sav: dict, ttl_minutes: int, cap: int = TAPE_C
 
     ticks: one [time ISO, context tokens, cache-write tokens, dollars or None] per real
     main-chat reply (helpers left out), oldest first, the most recent `cap` kept.
-    restarts / fresh_starts: from measure_savings, sessions in the map's "session:<id>" form."""
+    restarts / fresh_starts: from measure_savings, sessions in the map's "session:<id>" form.
+    replies_by_session: main-chat reply count per session (all replies, not only the kept ones)."""
     main = [r for r in usage.replies if not r.helper]
     kept = main[-cap:] if cap > 0 else []
     ticks = [[r.ts.isoformat(), r.context, r.cache_write, reply_cost(r)] for r in kept]
@@ -230,8 +231,13 @@ def tape_view(usage: UsageResult, sav: dict, ttl_minutes: int, cap: int = TAPE_C
     fresh = [{"t": f["t"], "session": f"session:{f['session']}", "saved": f["saved"],
               "cache_state": f["cache_state"]}
              for f in sav.get("fresh_starts", []) if isinstance(f.get("t"), str)]
+    per_session: dict[str, int] = {}
+    for r in main:
+        key = f"session:{r.session}"
+        per_session[key] = per_session.get(key, 0) + 1
     return {"available": True, "ttl_minutes": ttl_minutes, "ticks": ticks,
-            "truncated": len(main) - len(kept), "restarts": restarts, "fresh_starts": fresh}
+            "truncated": len(main) - len(kept), "restarts": restarts, "fresh_starts": fresh,
+            "replies_by_session": per_session}
 
 
 def token_view(transcripts_dir: Path | None, mem_dir: Path, now: datetime | None = None,
