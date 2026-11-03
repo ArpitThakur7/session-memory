@@ -39,6 +39,8 @@ A free Claude Code plugin that keeps a small memory of your project, so you can 
 - **Startup brief.** Each new or cleared session starts with a short summary of where you left off.
 - **Resume packs and a one-image snapshot.** Bigger summaries, as text or as one picture, when you need more than the brief.
 - **Cache-expiry watcher and guard.** A desktop notification before the prompt cache expires, and a one-time warning before an expensive resume.
+- **Read guard.** Stops Claude from reading the same unchanged file twice in one chat.
+- **Status line (optional).** Chat size, cache time left and tokens saved, always visible.
 - **MCP server.** The same memory for VS Code, Antigravity and other MCP clients.
 - **Token counter.** Exact token use and measured savings from your transcripts.
 - **3D memory map.** A self-contained page to explore the memory.
@@ -174,6 +176,40 @@ After each reply, a small background process watches the clock. Claude Code's pr
 - It is silent when it works. Errors go to `.claude/session-memory/error.log`.
 - Limit: there is one deadline for each project. If you have two chats open in the same project, the newest reply sets the deadline for both.
 
+## Read guard
+
+Claude often reads the same file again in one chat, and every re-read adds the whole file to the chat once more. The read guard is a `PreToolUse` hook on the Read tool. It refuses a read when all of these are true:
+
+- the same file (on Windows, `C:.py` and `c:/a/b.py` count as one file) was already read in this chat;
+- the file has not changed since (same modification time and size);
+- the requested lines were already read (a read without `offset`/`limit` counts as the first 2,000 lines);
+- the chat has not been compacted since (after `/compact` or an automatic compaction, reads are allowed again).
+
+Claude then sees: "Not re-read: <file> is unchanged since you read it at HH:MM in this chat. Use what you read then..." If it really needs the file again, the same read within 2 minutes goes through. Helper agents (subagents) have their own record, so they are never refused a file only the main chat read. Files over 2 MB, PDF page reads, missing files and whole-file reads of files over 100 KB are never refused. The record lives in `reads.json`.
+
+**Turn it off:** start Claude Code with `SESSION_MEMORY_READ_GUARD=0`.
+
+## Status line
+
+An optional status line under the prompt box:
+
+```
+Opus · chat 142k (71%) · cache 38m · saved 1.2M
+```
+
+- **chat**: tokens in the chat now and the share of the context window. From `SESSION_MEMORY_WARN_TOKENS` (default 150000) it turns yellow and says `chat 162k — /compact or /clear soon`; past 1.5 times that, red.
+- **cache**: minutes until the prompt cache expires, from Claude Code's `prompt_cache.expires_at` field (Claude Code 2.1.251 or later), else from the cache watcher's deadline; `cache cold` once it has expired.
+- **saved**: measured tokens saved by fresh starts (the `savings` command's measured total), read from a small `summary.json` the Stop hook refreshes. The status line never reads transcripts.
+
+Claude Code does not let a plugin set the status line, so it is a separate step that edits `~/.claude/settings.json`:
+
+```
+bin/run-python setup-statusline --dry-run   # show the change only
+bin/run-python setup-statusline             # add it (a backup of settings.json is saved first)
+```
+
+On Windows use `binun-python.cmd`. It keeps every other setting, refuses a file that is not valid JSON, and refuses to replace a different status line unless you add `--force`. `doctor` shows whether it is set. To remove it, delete the `statusLine` entry from `~/.claude/settings.json` (or set `SESSION_MEMORY_STATUSLINE=0` to make it print nothing).
+
 ## Use the memory in other tools
 
 The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack` and `memory_usage` (token totals and savings for the last `days` days, default 7).
@@ -258,6 +294,9 @@ Set these environment variables before starting Claude Code.
 |---|---|---|
 | `SESSION_MEMORY_IDLE_MIN` | 55 | Minutes of idle time after which the guard assumes the cache has expired. |
 | `SESSION_MEMORY_MIN_TOKENS` | 30000 | The guard only fires when the chat is at least this many tokens. |
+| `SESSION_MEMORY_READ_GUARD` | 1 | `0` turns the read guard off. |
+| `SESSION_MEMORY_WARN_TOKENS` | 150000 | Chat size from which the status line warns. |
+| `SESSION_MEMORY_STATUSLINE` | 1 | `0` makes the status line print nothing. |
 
 The guard never blocks slash commands (messages starting with `/`) or messages starting with `<` (task notifications, background-agent reports, messages from other sessions).
 
@@ -274,6 +313,8 @@ Everything is under `<project>/.claude/session-memory/`:
 - `events.jsonl` - one line per guard block and per fresh start with a brief (times, session ids and sizes only, no text), used by `savings`
 - `watch.json` - the cache watcher's deadline, warning time and which deadline was already announced
 - `watch.lock` - the running cache watcher's process id, so only one watcher runs per project
+- `reads.json` - the read guard's record: per chat, which files were read (normalized path, modification time, size, line ranges, time), no file contents
+- `summary.json` - measured-saved totals for the status line (numbers only)
 - `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command, the cache watcher, and, for `resume-pack.md`, each new session)
 - `memory-map.html` - the 3D memory map page (made by `/memory-map` or the `map` command)
 - `error.log` - any internal errors (the plugin never blocks your work if it fails)
