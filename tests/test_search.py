@@ -62,6 +62,8 @@ def test_tie_break_newest_first_and_deterministic():
 
 def test_scratch_files_and_outside_paths_hidden(tmp_path):
     root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "cachewatch.py").write_text("", encoding="utf-8")
     g = Graph()
     g.add_node("file", "a", str(root / "src" / "cachewatch.py").replace("\\", "/"), "2026-10-01T00:00:00Z")
     g.add_node("file", "b", "C:/Users/someone/elsewhere/cachewatch_notes.py", "2026-10-01T00:00:00Z")
@@ -160,3 +162,51 @@ def test_file_outranks_long_old_tasks():
         g.add_node("task", f"o{i}", f"unrelated billing chore {i}", "2026-09-01T00:00:00Z")
     top = [shown for _, shown, _ in search.search(g, "fix the cache watcher notification")[:3]]
     assert "memgraph/watch.py" in top
+
+
+def test_near_duplicate_errors_and_weak_error_matches():
+    g = Graph()
+    for i in range(4):
+        g.add_node("error", f"dup{i}", f"Command failed with exit code {i + 1}: windows path too long ({i})",
+                   f"2026-10-0{i + 1}T00:00:00Z")
+    g.add_node("error", "e1", "windows path separator wrong in tests", "2026-10-05T00:00:00Z")
+    g.add_node("error", "e2", "windows path case mismatch on import", "2026-10-06T00:00:00Z")
+    g.add_node("error", "e3", "Access denied on windows", "2026-10-07T00:00:00Z")
+    g.add_node("task", "t", "support long windows paths in the packer", "2026-10-08T00:00:00Z")
+    for i in range(30):
+        g.add_node("task", f"o{i}", f"unrelated billing chore {i}", "2026-09-01T00:00:00Z")
+    hits = search.search(g, "windows path")
+    shown = [s for _, s, _ in hits]
+    errors = [s for n, s, _ in hits if n["kind"] == "error"]
+    assert len(errors) <= 2
+    assert sum("too long" in s for s in shown) <= 1
+    assert "Access denied on windows" not in shown  # one query word is not enough for an error
+    assert not [n for n, _, _ in search.search(g, "windows") if n["kind"] == "error"]
+
+
+def test_missing_files_dropped(tmp_path):
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "cachewatch_here.py").write_text("x = 1\n", encoding="utf-8")
+    g = Graph()
+    g.add_node("file", "a", "src/cachewatch_here.py", "2026-10-01T00:00:00Z")
+    g.add_node("file", "b", "src/cachewatch_gone.py", "2026-10-02T00:00:00Z")
+    for i in range(30):
+        g.add_node("task", f"o{i}", f"other thing {i}", "2026-09-01T00:00:00Z")
+    shown = [s for _, s, _ in search.search(g, "cachewatch", root)]
+    assert shown == ["src/cachewatch_here.py"]
+
+
+def test_path_scrub_git_bash_and_posix_paths():
+    from memgraph.brief import display_path
+
+    win = Path("C:/Users/x/proj")
+    assert display_path("/c/Users/x/proj/a.py", win) == "a.py"
+    assert display_path("/home/bob/.ssh/id_rsa", win) is None
+    assert display_path("/home/bob/.ssh/id_rsa", Path("/home/x/proj")) is None
+    assert display_path("D:/other/a.py", Path("/home/x/proj")) is None
+    assert display_path("src/a.py", win) == "src/a.py"
+    assert search._scrub("failed in /c/Users/x/proj/a.py: boom", win) == "failed in a.py: boom"
+    assert search._scrub("cat /home/bob/.ssh/id_rsa: denied", win) == "cat [path]: denied"
+    assert search._scrub("open C:/Users/x/proj/b.py, then", win) == "open b.py, then"
+    assert search._scrub("type D:/secret/key.txt: denied", win) == "type [path]: denied"

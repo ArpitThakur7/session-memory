@@ -1,11 +1,12 @@
 """Build the short startup brief that replaces re-sending an old conversation."""
 from __future__ import annotations
 
-import os
+import ntpath
+import posixpath
 from pathlib import Path
 
 from memgraph.graph import Graph
-from memgraph.relevance import is_project_file, project_errors
+from memgraph.relevance import is_absolute, is_drive_path, is_project_file, native_path, project_errors
 from memgraph.transcript import clean_prompt, fmt_local
 
 TITLE = "# Project memory (auto-loaded by session-memory)"
@@ -46,11 +47,24 @@ def _request_line(last_prompt: dict, text: str) -> str:
 def display_path(label: str, project_root: Path | None) -> str | None:
     """How a file is shown: relative to `project_root` when inside it, None (hidden)
     when it is absolute and outside it. Relative paths, and every path when there
-    is no root, are shown as recorded."""
-    if project_root is None or not os.path.isabs(label):
+    is no root, are shown as recorded. A leading slash is absolute on every platform, and
+    Git Bash's /c/... is compared as C:/... against a Windows root."""
+    if project_root is None:
         return label
+    label = native_path(label, project_root)
+    if not is_absolute(label):
+        return label
+    root = str(project_root)
+    if is_drive_path(root):
+        if not is_drive_path(label):
+            return None  # /home/... or \\server\...: never inside a drive folder
+        mod = ntpath
+    elif is_drive_path(label):
+        return None
+    else:
+        mod, label, root = posixpath, label.replace("\\", "/"), root.replace("\\", "/")
     try:
-        rel = os.path.relpath(os.path.normpath(label), os.path.normpath(str(project_root)))
+        rel = mod.relpath(mod.normpath(label), mod.normpath(root))
     except ValueError:  # another drive on Windows
         return None
     rel = rel.replace("\\", "/")

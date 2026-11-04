@@ -35,13 +35,35 @@ def _mentions_temp(text) -> bool:
     return _TEMP_HINT in norm + "/"
 
 
+_GIT_BASH = re.compile(r"/([A-Za-z])(?=/|$)")
+
+
 def _is_absolute(label: str) -> bool:
     return bool(_DRIVE.match(label)) or label.startswith(("/", "\\"))
 
 
+def is_absolute(label) -> bool:
+    """Absolute on any platform: a drive path, or one starting with a slash or backslash."""
+    return _is_absolute(str(label))
+
+
+def is_drive_path(text) -> bool:
+    return bool(_DRIVE.match(str(text)))
+
+
+def native_path(label, project_root) -> str:
+    """Git Bash's /c/... spelled C:/... when the project root is a Windows drive path."""
+    label = str(label or "")
+    if project_root is not None and _DRIVE.match(str(project_root)):
+        m = _GIT_BASH.match(label)
+        if m:
+            return m.group(1).upper() + ":" + (label[2:] or "/")
+    return label
+
+
 def is_project_file(label, project_root: Path | None) -> bool:
     """False for scratch: outside `project_root`, under an ignored folder, or in the temp folder."""
-    label = str(label or "")
+    label = native_path(label, project_root)
     absolute = _is_absolute(label)
     rel = _norm(label)
     if absolute and project_root is not None:
