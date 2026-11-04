@@ -277,3 +277,32 @@ def test_summary_recomputed_only_when_events_change(tmp_path, monkeypatch):
     savings.append_event(m, {"type": "guard_block"})
     assert savings.refresh_summary(tmp_path, m, 60, NOW + timedelta(minutes=2)) is True
     assert len(calls) == 2
+
+
+def test_prompt_cache_without_expires_at_falls_back_to_watch_json(tmp_path):
+    data = sample(tmp_path)
+    data["prompt_cache"] = {"hit_ratio": 0.9}
+    (mem(tmp_path) / "watch.json").write_text(json.dumps({"deadline": (NOW + timedelta(minutes=7)).isoformat()}),
+                                              encoding="utf-8")
+    assert "cache 7m" in line(data)
+
+
+def test_memory_folder_from_project_dir_first(tmp_path, monkeypatch):
+    sub = tmp_path / "sub"
+    mem(sub)  # a stray folder from before must not win
+    (mem(tmp_path) / "summary.json").write_text(json.dumps({"measured_saved_tokens": 5000}), encoding="utf-8")
+    data = sample(tmp_path)
+    data["workspace"] = {"current_dir": str(sub), "project_dir": str(tmp_path)}
+    assert "saved 5k" in line(data)
+    data["workspace"] = {"current_dir": str(sub)}
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    assert "saved 5k" in line(data)
+
+
+def test_setup_honours_claude_config_dir(home, tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    rc, text = setup()
+    assert rc == 0, text
+    assert "statusLine" in json.loads((cfg / "settings.json").read_text(encoding="utf-8"))
+    assert not settings(home).exists()

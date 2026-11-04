@@ -28,12 +28,23 @@ def payload(proj, file=None, session="s1", **tool):
             "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": tool_input}
 
 
-def hook(data, now=T0, name="hook-pre-read"):
+def raw(name, data, now=T0):
     out = io.StringIO()
     text = data if isinstance(data, str) else json.dumps(data)
     rc = main([name], io.StringIO(text), out, now=now)
     assert rc == 0
     return out.getvalue()
+
+
+def hook(data, now=T0, name="read"):
+    """name="read": a Read as Claude Code runs it — PreToolUse, then (allowed, and it worked) PostToolUse."""
+    if name != "read":
+        return raw(name, data, now)
+    text = raw("hook-pre-read", data, now)
+    if not text and isinstance(data, dict):
+        post = dict(data, hook_event_name="PostToolUse", tool_response={"type": "text"})
+        assert raw("hook-post-read", post, now) == ""
+    return text
 
 
 def denied(text):
@@ -145,13 +156,53 @@ def test_missing_file_and_huge_file_allowed(proj):
     assert hook(payload(proj, file=big), T0 + timedelta(minutes=1)) == ""
 
 
-def test_large_whole_read_not_recorded_but_ranges_are(proj):
+def test_failed_or_declined_read_is_not_recorded(proj):
+    """PreToolUse alone (the read was declined or failed, so PostToolUse never ran) records nothing."""
+    assert raw("hook-pre-read", payload(proj)) == ""
+    assert raw("hook-pre-read", payload(proj), T0 + timedelta(minutes=1)) == ""
+    assert not (proj / ".claude" / "session-memory" / "reads.json").exists()
+
+
+def test_large_whole_read_recorded_after_success(proj):
     f = proj / "large.txt"
-    f.write_text("x" * (readguard.WHOLE_READ_MAX_BYTES + 10), encoding="utf-8")
+    f.write_text("x" * 200_000, encoding="utf-8")
     hook(payload(proj, file=f))
-    assert hook(payload(proj, file=f), T0 + timedelta(minutes=1)) == ""  # may have failed as too large
-    hook(payload(proj, file=f, offset=1, limit=10), T0 + timedelta(minutes=2))
-    assert denied(hook(payload(proj, file=f, offset=1, limit=10), T0 + timedelta(minutes=3)))
+    assert denied(hook(payload(proj, file=f), T0 + timedelta(minutes=1)))
+
+
+def test_numeric_string_offset_limit_coerced(proj):
+    hook(payload(proj, offset="200", limit="50"))
+    assert denied(hook(payload(proj, offset=210, limit=10), T0 + timedelta(minutes=1)))
+    assert hook(payload(proj, offset=1, limit=10), T0 + timedelta(minutes=2)) == ""  # not poisoned as whole
+
+
+@pytest.mark.parametrize("bad", [{"offset": "abc"}, {"limit": "1.5x"}, {"offset": [1]}, {"limit": 0}, {"offset": True}])
+def test_unparseable_offset_or_limit_allowed_and_not_recorded(proj, bad):
+    hook(payload(proj, **bad))
+    assert hook(payload(proj, **bad), T0 + timedelta(minutes=1)) == ""
+    assert hook(payload(proj, offset=1, limit=5), T0 + timedelta(minutes=2)) == ""
+
+
+def test_records_older_than_45_minutes_do_not_deny(proj):
+    hook(payload(proj))
+    assert denied(hook(payload(proj), T0 + timedelta(minutes=44)))
+    assert hook(payload(proj), T0 + timedelta(minutes=46)) == ""
+    assert denied(hook(payload(proj), T0 + timedelta(minutes=50)))
+
+
+def test_memory_folder_is_project_root(proj, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(proj))
+    sub = proj / "pkg"
+    sub.mkdir()
+    data = payload(proj)
+    data["cwd"] = str(sub)
+    hook(data)
+    assert denied(hook(data, T0 + timedelta(minutes=1)))
+    assert not (sub / ".claude").exists()
+    compact = {"session_id": "s1", "transcript_path": str(proj / "t.jsonl"), "cwd": str(proj),
+               "hook_event_name": "PreCompact", "trigger": "manual"}
+    hook(compact, T0 + timedelta(minutes=2), name="hook-compact")
+    assert hook(data, T0 + timedelta(minutes=3)) == ""
 
 
 def test_pdf_pages_not_guarded(proj):
@@ -190,6 +241,8 @@ def test_hooks_json_registers_read_guard_and_compaction():
                        .read_text(encoding="utf-8"))["hooks"]
     pre = hooks["PreToolUse"]
     assert any(e.get("matcher") == "Read" and "hook-pre-read" in e["hooks"][0]["command"] for e in pre)
+    assert any(e.get("matcher") == "Read" and "hook-post-read" in e["hooks"][0]["command"]
+               for e in hooks["PostToolUse"])
     assert any("hook-compact" in e["hooks"][0]["command"] for e in hooks["PreCompact"])
     assert any(e.get("matcher") == "compact" and "hook-compact" in e["hooks"][0]["command"]
                for e in hooks["SessionStart"])

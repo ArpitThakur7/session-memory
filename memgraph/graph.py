@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from memgraph.store import write_json_atomic  # noqa: F401  (re-exported)
 from memgraph.transcript import Event, parse_ts
 
 _MAX_TOOL_NODES = 500
@@ -64,23 +65,6 @@ def _apply_todo_delta(items, delta: dict) -> None:
 
 def _digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:12]
-
-
-def write_json_atomic(path: Path, obj) -> None:
-    """Write `obj` as JSON to `path` atomically: unique temp file beside it, then os.replace."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh, ensure_ascii=False)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
 
 
 LOCK_TIMEOUT = 2.0  # seconds a writer waits for graph.lock before giving up

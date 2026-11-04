@@ -7,22 +7,17 @@ import os
 import sys
 import tempfile
 import traceback
-import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
-from memgraph import savings, watch
-from memgraph.brief import build_brief
-from memgraph.graph import Graph, GraphBusy, graph_lock, update
-from memgraph.guard import GuardConfig, decide, last_activity
-from memgraph.ingest import ingest_dir, load_state, memory_dir, pack_size, record_pack_size, save_state
-from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
-from memgraph.pack import PACK_FILE, SIZES, write_pack
-from memgraph.usage import (GROUPINGS, PRICES_AS_OF, collect_usage, summarize, totals, totals_line,
-                            transcripts_dir_for, usage_table)
-from memgraph.viewer import write_map
-from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
+from memgraph.store import load_state, memory_dir, project_root
+
+if TYPE_CHECKING:
+    from memgraph.graph import Graph
+
+# Everything else is imported where it is used: the Read hooks and the status line run on every
+# tool call or reply and must not pay for the graph, packs, map or token counter.
 
 
 def _log_error(mem: Path | None) -> None:
@@ -47,6 +42,9 @@ def _ingest(payload: dict, mem: Path) -> Graph:
     When another writer holds the lock past the timeout, skip this run: ingest is
     offset-based, so the next hook catches up. The graph as stored is returned.
     """
+    from memgraph.graph import Graph, GraphBusy, graph_lock
+    from memgraph.ingest import ingest_dir, save_state
+
     path = mem / "graph.json"
     try:
         with graph_lock(path):
@@ -63,42 +61,54 @@ def _ingest(payload: dict, mem: Path) -> Graph:
 
 
 def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
-    if name == "hook-pre-read":
+    if name in ("hook-pre-read", "hook-post-read", "hook-compact"):
         from memgraph import readguard
 
-        reason = readguard.check(payload, mem, now)
-        if reason:
-            _emit(stdout, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                  "permissionDecisionReason": reason}})
-            _log_event(mem, {"type": "read_denied", "session": payload.get("session_id")})
-    elif name == "hook-compact":
-        from memgraph import readguard
+        if name == "hook-post-read":
+            readguard.record(payload, mem, now)
+        elif name == "hook-compact":
+            readguard.bump_compaction(payload, mem)
+        else:
+            reason = readguard.check(payload, mem, now)
+            if reason:
+                _emit(stdout, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                      "permissionDecisionReason": reason}})
+                _log_event(mem, {"type": "read_denied", "session": payload.get("session_id")})
+        return
+    root = project_root(payload["cwd"])
+    if name == "hook-stop":
+        from memgraph import savings, watch
 
-        readguard.bump_compaction(payload, mem)
-    elif name == "hook-stop":
         _ingest(payload, mem)
-        watch.arm(mem, Path(payload["transcript_path"]), Path(payload["cwd"]), now)
+        watch.arm(mem, Path(payload["transcript_path"]), root, now)
         try:  # the status line's "saved" figure; cheap unless new events arrived
             savings.refresh_summary(Path(os.path.dirname(payload["transcript_path"])), mem, watch.ttl_minutes(),
                                     now)
         except Exception:
             _log_error(mem)
     elif name == "hook-session-start":
+        from memgraph.brief import build_brief
+        from memgraph.ingest import pack_size
+        from memgraph.pack import PACK_FILE, write_pack
+
         graph = _ingest(payload, mem)
         try:  # the brief points at the pack, so it must show what the brief shows
-            write_pack(graph, mem, pack_size(mem), Path(payload["cwd"]))
+            write_pack(graph, mem, pack_size(mem), root)
         except Exception:
             _log_error(mem)  # the brief still works without a fresh pack; never point at a stale one
             try:
                 (mem / PACK_FILE).unlink(missing_ok=True)
             except OSError:
                 pass
-        brief = build_brief(graph, project_root=Path(payload["cwd"]), mem_dir=mem)
+        brief = build_brief(graph, project_root=root, mem_dir=mem)
         if brief:
             _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
             if payload.get("source") in ("startup", "clear"):
                 _log_event(mem, _fresh_start(graph, payload, brief))
     else:  # hook-prompt
+        from memgraph.guard import GuardConfig, decide, last_activity
+        from memgraph.ingest import save_state
+
         state = load_state(mem / "guard.json")  # own file: never races ingest's state.json
         state["transcripts_dir"] = os.path.dirname(payload["transcript_path"])
         last_ts, context = last_activity(Path(payload["transcript_path"]))
@@ -123,8 +133,10 @@ def _fresh_start(graph: Graph, payload: dict, brief: str) -> dict:
 
 def _log_event(mem: Path, event: dict) -> None:
     """Append to events.jsonl; a failure is logged, never raised (the hook's output already went out)."""
+    from memgraph.store import append_event
+
     try:
-        savings.append_event(mem, event)
+        append_event(mem, event)
     except Exception:
         _log_error(mem)
 
@@ -134,11 +146,16 @@ def _emit(stdout: TextIO, obj: dict) -> None:
 
 
 def _project() -> tuple[Path, Graph]:
+    from memgraph.graph import Graph
+
     mem = memory_dir(Path.cwd())
     return mem, Graph.load(mem / "graph.json")
 
 
 def _remember(args: list[str], stdout: TextIO, now: datetime) -> int:
+    from memgraph.graph import GraphBusy, update
+    from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, remember
+
     text = " ".join(args).strip()
     if not text:
         stdout.write("Usage: remember <text>\n")
@@ -157,6 +174,8 @@ def _remember(args: list[str], stdout: TextIO, now: datetime) -> int:
 
 
 def _recall(args: list[str], stdout: TextIO) -> int:
+    from memgraph.memory_ops import recall_lines
+
     term = " ".join(args).strip()
     _, graph = _project()
     out = recall_lines(graph, term)
@@ -168,6 +187,8 @@ def _recall(args: list[str], stdout: TextIO) -> int:
 
 
 def _stats(stdout: TextIO) -> int:
+    from memgraph.brief import build_brief
+
     _, graph = _project()
     sessions = graph.meta.get("sessions", {})
     stdout.write(
@@ -178,6 +199,12 @@ def _stats(stdout: TextIO) -> int:
 
 
 def _map(args: list[str], stdout: TextIO) -> int:
+    import webbrowser
+
+    from memgraph import savings
+    from memgraph.usage import transcripts_dir_for
+    from memgraph.viewer import write_map
+
     project = Path.cwd()
     mem, graph = _project()
     try:
@@ -193,6 +220,10 @@ def _map(args: list[str], stdout: TextIO) -> int:
 
 
 def _pack(args: list[str], stdout: TextIO) -> int:
+    from memgraph.ingest import record_pack_size
+    from memgraph.pack import SIZES, write_pack
+    from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
+
     size = "standard"
     if "--size" in args:
         i = args.index("--size")
@@ -231,12 +262,16 @@ def _opt(args: list[str], name: str) -> str | None:
 
 
 def _transcripts(args: list[str]) -> tuple[Path, Path]:
+    from memgraph.usage import transcripts_dir_for
+
     mem = memory_dir(Path.cwd())
     given = _opt(args, "--transcripts")
     return (Path(given).expanduser() if given else transcripts_dir_for(Path.cwd(), mem)), mem
 
 
 def _usage(args: list[str], stdout: TextIO, now: datetime) -> int:
+    from memgraph.usage import GROUPINGS, PRICES_AS_OF, collect_usage, summarize, totals, totals_line, usage_table
+
     days_text, by = _opt(args, "--days"), _opt(args, "--by") or "day"
     try:
         days = 7 if days_text is None else int(days_text)
@@ -263,6 +298,8 @@ def _usage(args: list[str], stdout: TextIO, now: datetime) -> int:
 
 
 def _savings(args: list[str], stdout: TextIO) -> int:
+    from memgraph import savings, watch
+
     if any(a.startswith("-") and a not in ("--json", "--transcripts") for a in args):
         stdout.write(_SAVINGS_HELP)
         return 2
@@ -279,6 +316,8 @@ def _watch(args: list[str]) -> int:
     """Background cache watcher (started detached by hook-stop). Silent; errors go to error.log."""
     mem = None
     try:
+        from memgraph import watch
+
         i = args.index("--project") if "--project" in args else -1
         project = Path(args[i + 1]) if 0 <= i < len(args) - 1 else Path.cwd()
         mem = memory_dir(project)
@@ -297,18 +336,21 @@ def _mcp(args: list[str]) -> int:
     return 0
 
 
+HOOKS = ("hook-stop", "hook-session-start", "hook-prompt", "hook-pre-read", "hook-post-read", "hook-compact")
+
+
 def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     cmd, args = (argv[0], argv[1:]) if argv else ("", [])
     if cmd.startswith("hook-"):
         mem = None
         try:
-            if cmd not in ("hook-stop", "hook-session-start", "hook-prompt", "hook-pre-read", "hook-compact"):
+            if cmd not in HOOKS:
                 raise ValueError(f"unknown hook {cmd}")
             payload = json.loads(stdin.read())
             if not isinstance(payload, dict):
                 raise ValueError("hook input is not a JSON object")
-            mem = memory_dir(Path(payload["cwd"]))
+            mem = memory_dir(project_root(payload["cwd"]))  # one folder per project, even from a subfolder
             _run_hook(cmd, payload, mem, stdout, now)
         except Exception:
             _log_error(mem)
@@ -347,10 +389,12 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.statusline import setup_statusline_main
 
         return setup_statusline_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 
 if __name__ == "__main__":
+    if sys.version_info < (3, 10):  # the .cmd launcher runs `py -3` directly; an old Python exits quietly
+        sys.exit(0)
     sys.stdout.reconfigure(encoding="utf-8")
     sys.exit(main(sys.argv[1:], io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace"), sys.stdout))

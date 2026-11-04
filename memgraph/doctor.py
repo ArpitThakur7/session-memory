@@ -201,9 +201,9 @@ def _check_mcp_antigravity(ctx) -> dict:
 
 
 def _check_statusline(ctx) -> dict:
-    from memgraph.statusline import is_ours
+    from memgraph.statusline import is_ours, settings_path
 
-    path = ctx["home"] / ".claude" / "settings.json"
+    path = settings_path(ctx["home"])
     fix = f"{_cli()} setup-statusline (optional: chat size, cache time left and tokens saved)"
     if not path.is_file():
         return _check("statusline", "skip", f"Status line not set (optional; no {path})", fix)

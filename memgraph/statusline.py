@@ -78,13 +78,25 @@ def _context(data: dict) -> tuple[float | None, float | None]:
 
 
 def _mem_dir(data: dict) -> Path | None:
-    """The project's memory folder if it already exists (never created here)."""
-    for value in (_get(data, "workspace", "current_dir"), data.get("cwd"), _get(data, "workspace", "project_dir")):
+    """The project's memory folder if it already exists (never created here).
+
+    The project is CLAUDE_PROJECT_DIR, else workspace.project_dir, else the current folder, so a
+    stray folder in a subdirectory is never used."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+    for value in (env, _get(data, "workspace", "project_dir"), _get(data, "workspace", "current_dir"),
+                  data.get("cwd")):
         if isinstance(value, str) and value:
             d = Path(value) / ".claude" / "session-memory"
-            if d.is_dir():
-                return d
+            return d if d.is_dir() else None
     return None
+
+
+def settings_path(home: Path | None = None) -> Path:
+    """Claude Code's user settings file: $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json."""
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if cfg:
+        return Path(cfg).expanduser() / "settings.json"
+    return (Path(home) if home else Path.home()) / ".claude" / "settings.json"
 
 
 def _read_json(path: Path) -> dict:
@@ -97,7 +109,7 @@ def _read_json(path: Path) -> dict:
 
 def _cache(data: dict, mem: Path | None, now: datetime) -> str | None:
     pc = data.get("prompt_cache")
-    if isinstance(pc, dict):
+    if isinstance(pc, dict) and ("expires_at" in pc or pc.get("warm") is False):
         expires = _num(pc.get("expires_at"))
         if pc.get("warm") is False or expires is None or expires <= now.timestamp():
             return "cache cold"
@@ -191,7 +203,7 @@ def setup_statusline_main(args: list[str], out: TextIO, home: Path | None = None
         out.write(USAGE)
         return 2
     dry_run, force = "--dry-run" in args, "--force" in args
-    path = (Path(home) if home else Path.home()) / ".claude" / "settings.json"
+    path = settings_path(home)
     new_entry = entry()
     snippet = json.dumps({"statusLine": new_entry}, indent=2)
     try:

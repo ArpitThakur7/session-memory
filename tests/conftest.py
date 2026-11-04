@@ -24,3 +24,10 @@ def _no_real_watcher(monkeypatch):
 
     monkeypatch.setattr(watch, "_spawn", refuse_spawn)
     monkeypatch.setattr(watch, "notify", refuse_notify)
+
+
+@pytest.fixture(autouse=True)
+def _no_claude_dirs(monkeypatch):
+    """Running inside Claude Code must not point tests at the real project or config folder."""
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)

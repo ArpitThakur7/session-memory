@@ -5,32 +5,8 @@ import json
 from pathlib import Path
 
 from memgraph.graph import Graph, write_json_atomic
+from memgraph.store import load_state, memory_dir  # noqa: F401  (re-exported)
 from memgraph.transcript import SIDECHAIN_KINDS, parse_line
-
-
-def memory_dir(cwd: Path) -> Path:
-    """The per-project memory directory, created if missing.
-
-    It holds a `.gitignore` of `*` so graph.json (commands, prompts, errors)
-    is never committed by accident; an existing .gitignore is left alone.
-    """
-    d = Path(cwd) / ".claude" / "session-memory"
-    d.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(d / ".gitignore", "x", encoding="utf-8", newline="\n") as fh:
-            fh.write("*\n")
-    except OSError:  # already there (FileExistsError) or not writable: memory still works
-        pass
-    return d
-
-
-def load_state(path: Path) -> dict:
-    """Load ingest state; a missing or corrupt file yields {}."""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def save_state(path: Path, state: dict) -> None:

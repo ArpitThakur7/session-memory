@@ -15,25 +15,12 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from memgraph.store import EVENTS_FILE, append_event  # noqa: F401  (re-exported)
 from memgraph.transcript import fmt_local, parse_ts
 from memgraph.usage import (PRICES_AS_OF, WRITE_1H_FACTOR, WRITE_5M_FACTOR, WRITE_UNKNOWN_FACTOR,
                             Reply, UsageResult, collect_usage, price_for, reply_cost)
 
-EVENTS_FILE = "events.jsonl"
 DEFAULT_BRIEF_TOKENS = 500  # estimate when no brief size was ever recorded
-
-
-def append_event(mem_dir: Path, event: dict) -> None:
-    """Append one JSON line to events.jsonl with a single O_APPEND write (no lock needed).
-
-    The record starts with a newline too, so a torn earlier write cannot swallow it."""
-    obj = {"t": datetime.now(timezone.utc).isoformat(timespec="seconds"), **event}
-    data = ("\n" + json.dumps(obj, ensure_ascii=True) + "\n").encode("ascii")
-    fd = os.open(Path(mem_dir) / EVENTS_FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-    try:
-        os.write(fd, data)
-    finally:
-        os.close(fd)
 
 
 def read_events(mem_dir: Path) -> list[dict]:

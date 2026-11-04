@@ -161,7 +161,7 @@ def test_map_no_open_prints_path_and_does_not_open(tmp_path, monkeypatch):
     run(["hook-stop"], hook_input(tmp_path))
     monkeypatch.chdir(tmp_path / "proj")
     opened = []
-    monkeypatch.setattr("memgraph.cli.webbrowser.open", lambda url: opened.append(url))
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     out = run(["map", "--no-open"], "")
     path = tmp_path / "proj/.claude/session-memory/memory-map.html"
     assert out == f"Memory map: {path}\n"
@@ -171,7 +171,7 @@ def test_map_no_open_prints_path_and_does_not_open(tmp_path, monkeypatch):
 def test_map_opens_browser_with_file_uri(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     opened = []
-    monkeypatch.setattr("memgraph.cli.webbrowser.open", lambda url: opened.append(url))
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     out = run(["map"], "")
     path = tmp_path / ".claude/session-memory/memory-map.html"
     assert out == f"Memory map: {path}\n"
@@ -200,7 +200,7 @@ def test_pack_no_visual_and_bad_size(tmp_path, monkeypatch):
 def test_pack_reports_missing_pillow(tmp_path, monkeypatch):
     run(["hook-stop"], hook_input(tmp_path))
     monkeypatch.chdir(tmp_path / "proj")
-    monkeypatch.setattr("memgraph.cli.render_visual_pack", lambda *a, **k: None)
+    monkeypatch.setattr("memgraph.visual.render_visual_pack", lambda *a, **k: None)
     assert run(["pack"], "").splitlines()[1] == "Visual pack skipped: install Pillow"
 
 
@@ -309,8 +309,8 @@ def test_session_start_rebuilds_pack_at_last_size_built(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path / "proj")
     run(["pack", "--size", "deep", "--no-visual"], "")
     sizes = []
-    real = __import__("memgraph.cli", fromlist=["write_pack"]).write_pack
-    monkeypatch.setattr("memgraph.cli.write_pack", lambda g, m, s, *a, **k: sizes.append(s) or real(g, m, s, *a, **k))
+    real = __import__("memgraph.pack", fromlist=["write_pack"]).write_pack
+    monkeypatch.setattr("memgraph.pack.write_pack", lambda g, m, s, *a, **k: sizes.append(s) or real(g, m, s, *a, **k))
     run(["hook-session-start"], payload)
     assert sizes == ["deep"]
 
@@ -373,12 +373,12 @@ def test_hook_stop_records_transcripts_dir(tmp_path):
 
 
 def test_event_log_failure_never_breaks_the_brief(tmp_path, monkeypatch):
-    import memgraph.savings as savings
+    import memgraph.store as store
 
     def boom(*a, **k):
         raise OSError("disk full")
 
-    monkeypatch.setattr(savings, "append_event", boom)
+    monkeypatch.setattr(store, "append_event", boom)
     out = run(["hook-session-start"], hook_input(tmp_path, source="clear"))
     assert "Fix login test" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "disk full" in (tmp_path / "proj/.claude/session-memory/error.log").read_text(encoding="utf-8")
