@@ -178,14 +178,15 @@ After each reply, a small background process watches the clock. Claude Code's pr
 
 ## Read guard
 
-Claude often reads the same file again in one chat, and every re-read adds the whole file to the chat once more. The read guard is a `PreToolUse` hook on the Read tool. It refuses a read when all of these are true:
+Claude often reads the same file again in one chat, and every re-read adds the whole file to the chat once more. The read guard is a pair of hooks on the Read tool: `PostToolUse` notes each read that worked, and `PreToolUse` refuses a new read when all of these are true:
 
-- the same file (on Windows, `C:.py` and `c:/a/b.py` count as one file) was already read in this chat;
+- the same file (on Windows, `C:\a\b.py` and `c:/a/b.py` count as one file) was read successfully in this chat;
 - the file has not changed since (same modification time and size);
 - the requested lines were already read (a read without `offset`/`limit` counts as the first 2,000 lines);
+- that read was less than 45 minutes ago (older tool results may have been cleared from the chat);
 - the chat has not been compacted since (after `/compact` or an automatic compaction, reads are allowed again).
 
-Claude then sees: "Not re-read: <file> is unchanged since you read it at HH:MM in this chat. Use what you read then..." If it really needs the file again, the same read within 2 minutes goes through. Helper agents (subagents) have their own record, so they are never refused a file only the main chat read. Files over 2 MB, PDF page reads, missing files and whole-file reads of files over 100 KB are never refused. The record lives in `reads.json`.
+Claude then sees: "Not re-read: <file> is unchanged since you read it at HH:MM in this chat. Use what you read then..." If it really needs the file again, the same read within 2 minutes goes through. A read that was declined or failed is never noted, so it is never refused later. Helper agents (subagents) have their own record, so they are never refused a file only the main chat read. Files over 2 MB, PDF page reads and reads with an `offset` or `limit` that is not a number are never refused. The record lives in `reads.json` in the project's memory folder.
 
 **Turn it off:** start Claude Code with `SESSION_MEMORY_READ_GUARD=0`.
 
@@ -198,17 +199,17 @@ Opus · chat 142k (71%) · cache 38m · saved 1.2M
 ```
 
 - **chat**: tokens in the chat now and the share of the context window. From `SESSION_MEMORY_WARN_TOKENS` (default 150000) it turns yellow and says `chat 162k — /compact or /clear soon`; past 1.5 times that, red.
-- **cache**: minutes until the prompt cache expires, from Claude Code's `prompt_cache.expires_at` field (Claude Code 2.1.251 or later), else from the cache watcher's deadline; `cache cold` once it has expired.
-- **saved**: measured tokens saved by fresh starts (the `savings` command's measured total), read from a small `summary.json` the Stop hook refreshes. The status line never reads transcripts.
+- **cache**: time until the prompt cache expires, from Claude Code's `prompt_cache.expires_at` field (Claude Code 2.1.251 or later), else from the cache watcher's deadline; `cache cold` once it has expired.
+- **saved**: measured tokens saved by fresh starts (the `savings` command's measured total), read from a small `summary.json` that the Stop hook refreshes. The status line never reads transcripts.
 
-Claude Code does not let a plugin set the status line, so it is a separate step that edits `~/.claude/settings.json`:
+Claude Code does not let a plugin set the status line, so it is a separate step that edits your Claude Code user settings (`~/.claude/settings.json`, or `settings.json` in `CLAUDE_CONFIG_DIR` when that is set):
 
 ```
 bin/run-python setup-statusline --dry-run   # show the change only
 bin/run-python setup-statusline             # add it (a backup of settings.json is saved first)
 ```
 
-On Windows use `binun-python.cmd`. It keeps every other setting, refuses a file that is not valid JSON, and refuses to replace a different status line unless you add `--force`. `doctor` shows whether it is set. To remove it, delete the `statusLine` entry from `~/.claude/settings.json` (or set `SESSION_MEMORY_STATUSLINE=0` to make it print nothing).
+On Windows use `bin\run-python.cmd` with the full path to this repository. It keeps every other setting, refuses a file that is not valid JSON, and refuses to replace a different status line unless you add `--force`. `doctor` shows whether it is set. To remove it, delete the `statusLine` entry from the settings file (or set `SESSION_MEMORY_STATUSLINE=0` to make it print nothing).
 
 ## Use the memory in other tools
 
@@ -313,7 +314,7 @@ Everything is under `<project>/.claude/session-memory/`:
 - `events.jsonl` - one line per guard block and per fresh start with a brief (times, session ids and sizes only, no text), used by `savings`
 - `watch.json` - the cache watcher's deadline, warning time and which deadline was already announced
 - `watch.lock` - the running cache watcher's process id, so only one watcher runs per project
-- `reads.json` - the read guard's record: per chat, which files were read (normalized path, modification time, size, line ranges, time), no file contents
+- `reads.json` - the read guard's record: per chat, which files were read (normalized path, modification time, size, line ranges, times), no file contents
 - `summary.json` - measured-saved totals for the status line (numbers only)
 - `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command, the cache watcher, and, for `resume-pack.md`, each new session)
 - `memory-map.html` - the 3D memory map page (made by `/memory-map` or the `map` command)

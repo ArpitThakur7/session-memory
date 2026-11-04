@@ -9,8 +9,13 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - **Installers.** `install.ps1` (Windows PowerShell 5.1 and 7) and `install.sh` (macOS, Linux, Git Bash) find Python, offer Pillow, install the plugin and run `doctor`. Both have a dry-run and an uninstall mode.
 - **`doctor`.** Checks Python, Pillow, plugin files, the `claude` CLI, the plugin install, transcripts, memory, the cache watcher and MCP setup, each with a one-line fix.
 - **`setup-mcp claude|vscode|antigravity`.** Adds the MCP server with a backup, an atomic write and `--dry-run`.
-- **Read guard.** A `PreToolUse` hook on Read refuses to re-read a file that is unchanged since it was read in the same chat (same lines, no compaction since). The same read again within 2 minutes is allowed. Off with `SESSION_MEMORY_READ_GUARD=0`. Compaction (`PreCompact`, `SessionStart` with source `compact`) resets it.
-- **Status line.** `statusline` prints `<model> · chat 142k (71%) · cache 38m · saved 1.2M`, warning from `SESSION_MEMORY_WARN_TOKENS` (default 150000). `setup-statusline [--dry-run] [--force]` adds it to `~/.claude/settings.json` with a backup and a printed diff; `doctor` checks it. The Stop hook keeps a small `summary.json` so the status line never reads transcripts.
+- **Read guard.** `PostToolUse` notes each successful Read; `PreToolUse` refuses to re-read a file that is unchanged since it was read in the same chat (same lines, within 45 minutes, no compaction since). The same read again within 2 minutes is allowed. Off with `SESSION_MEMORY_READ_GUARD=0`. Compaction (`PreCompact`, `SessionStart` with source `compact`) resets it.
+- **Status line.** `statusline` prints `<model> · chat 142k (71%) · cache 38m · saved 1.2M`, warning from `SESSION_MEMORY_WARN_TOKENS` (default 150000). `setup-statusline [--dry-run] [--force]` adds it to `~/.claude/settings.json` (or `CLAUDE_CONFIG_DIR`) with a backup and a printed diff; `doctor` checks it. The Stop hook keeps a small `summary.json` so the status line never reads transcripts.
+
+### Changed
+
+- Hooks keep one memory folder per project: they use `CLAUDE_PROJECT_DIR` when Claude Code sets it, so a chat that moved into a subfolder no longer creates a second `.claude/session-memory` there.
+- Faster hooks: the CLI imports only what each command needs, and `bin/run-python.cmd` starts Python once (`py -3` directly; the version check moved into the CLI).
 
 ## 0.2.0
 
