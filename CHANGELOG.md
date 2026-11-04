@@ -21,6 +21,10 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 ### Changed
 
 - Hooks keep one memory folder per project: they use `CLAUDE_PROJECT_DIR` when Claude Code sets it, so a chat that moved into a subfolder no longer creates a second `.claude/session-memory` there.
+- `usage`, `savings`, `audit` and the map ignore a recorded transcripts folder that no longer exists and fall back to `CLAUDE_CONFIG_DIR/projects/<slug>` (or `~/.claude/projects/<slug>`).
+- The Stop hook refreshes the status line's `summary.json` only when a new `fresh_start` event was logged, not on every read, steer or guard event.
+- `audit`, `usage`, `savings`, `outline` and `find-symbol` no longer create a memory folder in the folder they look at.
+- Code outlines end with an ASCII "... N more symbols" line that names no tool. Helper descriptions are redacted before they reach the map or MCP replies.
 - Faster hooks: the CLI imports only what each command needs, and `bin/run-python.cmd` starts Python once (`py -3` directly; the version check moved into the CLI). `bin/run-python` (bash) also starts Python once and skips the Windows Store `python3` stub without running it.
 
 ## 0.2.0

@@ -247,12 +247,12 @@ def run_audit(project: Path, transcripts: Path | None = None, home: Path | None 
               now: datetime | None = None) -> dict:
     from datetime import timezone
 
-    from memgraph.store import memory_dir
+    from memgraph.store import memory_path
 
     project = Path(project).resolve()
     home = Path(home) if home else Path.home()
     now = now or datetime.now(timezone.utc)
-    mem = memory_dir(project)
+    mem = memory_path(project)  # read-only: an audit of another folder must not create memory there
     tdir = transcripts if transcripts is not None else transcripts_dir_for(project, mem)
     usage = collect_usage(tdir) if Path(tdir).is_dir() else None
     start = start_cost(usage.replies if usage else [])

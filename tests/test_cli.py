@@ -445,3 +445,24 @@ def test_savings_command_text_and_json(tmp_path, monkeypatch):
     rc, out = run_rc(["savings", "--transcripts", str(t), "--json"], "", now=NOW)
     data = json.loads(out)
     assert data["totals"]["cold_restarts"] == 1 and data["fresh_starts"] == []
+
+
+def test_read_only_commands_create_no_memory_folder(tmp_path, monkeypatch):
+    t = _seeded(tmp_path, monkeypatch)
+    from memgraph import audit
+
+    monkeypatch.setattr(audit, "_ask", lambda project, args: None)
+    sub = tmp_path / "proj" / "src"
+    sub.mkdir()
+    (sub / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    assert run_rc(["usage", "--transcripts", str(t)], "", now=NOW)[0] == 0
+    assert run_rc(["savings", "--transcripts", str(t)], "", now=NOW)[0] == 0
+    assert run_rc(["audit", "--project", str(target), "--transcripts", str(t)], "", now=NOW)[0] == 0
+    monkeypatch.chdir(sub)
+    rc, out = run_rc(["outline", "a.py"], "", now=NOW)
+    assert rc == 0 and "f (function)" in out
+    assert run_rc(["find-symbol", "f"], "", now=NOW)[0] == 0
+    assert not (tmp_path / "proj" / ".claude").exists()
+    assert not (sub / ".claude").exists() and not (target / ".claude").exists()

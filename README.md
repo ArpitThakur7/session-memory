@@ -167,7 +167,7 @@ Add `--json` for machine-readable output, or `--transcripts PATH` to point at a 
 
 ## Fixed-cost audit
 
-Every new chat pays for things you never typed: CLAUDE.md files, plugins, MCP servers, skills and Claude Code's own prompt. `audit` shows what that costs and what to switch off. It reads local transcripts and asks the `claude` CLI read-only questions, so it costs 0 model tokens:
+Every new chat pays for things you never typed: CLAUDE.md files, plugins, MCP servers, skills and Claude Code's own prompt. `audit` shows what that costs and what to switch off. It reads local transcripts and asks the `claude` CLI read-only questions, so it costs 0 model tokens. Note that `claude mcp list` checks each configured MCP server, so it may start local servers or contact remote ones. `audit`, `usage`, `savings`, `outline` and `find-symbol` only read: they never create a `.claude/session-memory` folder in the target or a subfolder:
 
 ```
 bin/run-python audit [--project PATH] [--json]

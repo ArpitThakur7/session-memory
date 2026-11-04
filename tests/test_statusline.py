@@ -274,8 +274,13 @@ def test_summary_recomputed_only_when_events_change(tmp_path, monkeypatch):
     monkeypatch.setattr(savings, "measure_savings", lambda *a, **k: calls.append(1) or real(*a, **k))
     assert savings.refresh_summary(tmp_path, m, 60, NOW) is True
     assert savings.refresh_summary(tmp_path, m, 60, NOW + timedelta(minutes=1)) is False
-    savings.append_event(m, {"type": "guard_block"})
-    assert savings.refresh_summary(tmp_path, m, 60, NOW + timedelta(minutes=2)) is True
+    for kind in ("guard_block", "read_denied", "big_read_steer", "jit_context", "read_retry"):
+        savings.append_event(m, {"type": kind})
+    assert savings.refresh_summary(tmp_path, m, 60, NOW + timedelta(minutes=2)) is False  # no fresh start
+    savings.append_event(m, {"type": "fresh_start", "session": "s9"})
+    assert savings.refresh_summary(tmp_path, m, 60, NOW + timedelta(minutes=3)) is True
+    savings.append_event(m, {"type": "read_denied"})
+    assert savings.refresh_summary(tmp_path, m, 60, NOW + timedelta(minutes=4)) is False
     assert len(calls) == 2
 
 

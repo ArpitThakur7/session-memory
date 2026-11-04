@@ -125,8 +125,25 @@ def test_transcripts_dir_from_state_or_slug(tmp_path, monkeypatch):
     got = usage.transcripts_dir_for(project, mem)
     slug = "".join(c if c.isalnum() else "-" for c in str(project.resolve()))
     assert got == tmp_path / "home" / ".claude" / "projects" / slug
+    (tmp_path / "t").mkdir()
     (mem / "state.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "t")}), encoding="utf-8")
     assert usage.transcripts_dir_for(project, mem) == tmp_path / "t"
+
+
+def test_transcripts_dir_ignores_stale_recorded_dirs(tmp_path, monkeypatch):
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    monkeypatch.setattr(usage.Path, "home", lambda: tmp_path / "home")
+    project = tmp_path / "proj"
+    slug = usage.project_slug(project)
+    (mem / "state.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "gone")}), encoding="utf-8")
+    (mem / "guard.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "gone2")}), encoding="utf-8")
+    assert usage.transcripts_dir_for(project, mem) == tmp_path / "home" / ".claude" / "projects" / slug
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    assert usage.transcripts_dir_for(project, mem) == tmp_path / "cfg" / "projects" / slug
+    (tmp_path / "live").mkdir()
+    (mem / "guard.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "live")}), encoding="utf-8")
+    assert usage.transcripts_dir_for(project, mem) == tmp_path / "live"  # state.json is stale, guard.json is not
 
 
 @pytest.mark.skipif(os.name != "nt", reason="a drive-letter path is only absolute on Windows")
@@ -143,3 +160,13 @@ def test_project_slug_is_ascii_only():
 @pytest.mark.skipif(os.name == "nt", reason="POSIX path form")
 def test_project_slug_is_ascii_only_posix():
     assert usage.project_slug(Path("/home/José/proj_é")) == "-home-Jos--proj--"
+
+
+def test_helper_descriptions_are_redacted(tmp_path):
+    secret = "ghp_" + "a1B2c3D4e5" * 4
+    sub = tmp_path / "sess" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-x.meta.json").write_text(json.dumps({"description": f"Deploy with token {secret} now"}),
+                                           encoding="utf-8")
+    got = usage.helper_descriptions(tmp_path)["agent-x"]
+    assert secret not in got and got.startswith("Deploy with token ") and got.endswith(" now")

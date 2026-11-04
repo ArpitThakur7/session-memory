@@ -21,6 +21,17 @@ def project_root(cwd) -> Path:
     return Path(env) if env else Path(cwd)
 
 
+def memory_path(cwd) -> Path:
+    """Where the project's memory folder is (or would be); never creates it. For read-only commands."""
+    return Path(cwd) / ".claude" / "session-memory"
+
+
+def existing_memory_dir(cwd) -> Path | None:
+    """The project's memory folder when it already exists, else None."""
+    d = memory_path(cwd)
+    return d if d.is_dir() else None
+
+
 def memory_dir(cwd: Path) -> Path:
     """The per-project memory directory, created if missing.
 

@@ -328,6 +328,7 @@ def test_outline_capped(proj):
     text = codeindex.outline(proj, memory_dir(proj), "many.py")
     assert len(text) <= 4000
     assert "more symbols" in text.splitlines()[-1]
+    assert text.isascii() and "code_" not in text.splitlines()[-1]  # the CLI may run without the MCP tools
 
 
 def test_find_orders_exact_prefix_substring(proj):
@@ -420,7 +421,8 @@ def test_big_code_read_steered_once_then_allowed(proj):
     assert reason.endswith("\nRead the lines you need with offset and limit (or the code_read tool if it is "
                            "available). To read the whole file anyway, read it again within 2 minutes.")
     assert len(reason) <= 3000
-    assert reason.rsplit("\nRead the lines", 1)[0].endswith(" more symbols \u2014 use code_outline")
+    assert reason.rsplit("\nRead the lines", 1)[0].endswith(" more symbols")
+    assert reason.isascii() and "code_outline" not in reason
     outline = reason.split("Its outline:\n", 1)[1].rsplit("\nRead the lines", 1)[0]
     assert len(outline) <= 3000 and "more symbols" in outline
     assert read(payload(proj, path), T0 + timedelta(seconds=60)) == ""  # the escape hatch
@@ -499,7 +501,7 @@ def test_whole_reason_capped_for_long_names(proj):
                    f"    return {i}\n" for i in range(400))
     (proj / "long.py").write_text(long, encoding="utf-8")
     reason = reason_of(read(payload(proj, proj / "long.py")))
-    assert len(reason) <= 3000 and "more symbols \u2014 use code_outline" in reason
+    assert len(reason) <= 3000 and reason.isascii() and "more symbols\n" in reason
 
 
 def test_rendered_ranges_are_ascii(proj, monkeypatch):

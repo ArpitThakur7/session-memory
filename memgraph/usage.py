@@ -8,6 +8,7 @@ API errors) are not replies and are skipped.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -247,7 +248,9 @@ def totals(replies: list[Reply]) -> dict:
 def helper_descriptions(transcripts_dir: Path) -> dict[str, str]:
     """agent file name (no extension) -> its description, from the sibling `agent-*.meta.json`.
 
-    Only the `description` key is read; anything unreadable is left out."""
+    Only the `description` key is read, with secrets hidden; anything unreadable is left out."""
+    from memgraph.redact import redact
+
     out: dict[str, str] = {}
     try:
         paths = sorted(Path(transcripts_dir).glob("*/subagents/agent-*.meta.json"))
@@ -260,7 +263,7 @@ def helper_descriptions(transcripts_dir: Path) -> dict[str, str]:
             continue
         desc = meta.get("description") if isinstance(meta, dict) else None
         if isinstance(desc, str) and desc.strip():
-            out[p.name[: -len(".meta.json")]] = " ".join(desc.split())
+            out[p.name[: -len(".meta.json")]] = " ".join(redact(desc).split())  # shown in the map and MCP
     return out
 
 
@@ -281,13 +284,16 @@ def project_slug(project: Path) -> str:
 
 
 def transcripts_dir_for(project: Path, mem_dir: Path | None) -> Path:
-    """Where this project's transcripts live: recorded by the hooks, else derived from the path."""
+    """Where this project's transcripts live: recorded by the hooks (when that folder still exists),
+    else derived from the path under CLAUDE_CONFIG_DIR (or ~/.claude)."""
     if mem_dir is not None:
         for name in ("state.json", "guard.json"):
             recorded = load_state(Path(mem_dir) / name).get("transcripts_dir")
-            if isinstance(recorded, str) and recorded:
+            if isinstance(recorded, str) and recorded and Path(recorded).is_dir():
                 return Path(recorded)
-    return Path.home() / ".claude" / "projects" / project_slug(project)
+    given = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    base = Path(given).expanduser() if given else Path.home() / ".claude"
+    return base / "projects" / project_slug(project)
 
 
 # ---------------------------------------------------------------- formatting

@@ -444,13 +444,17 @@ def list_files(root: Path) -> list[str]:
     return sorted(keep)[:MAX_FILES]
 
 
-def _load(mem: Path) -> dict:
+def _load(mem: Path | None) -> dict:
+    if mem is None:
+        return {}  # no memory folder: parse without a cache
     state = load_state(Path(mem) / INDEX_FILE)
     files = state.get("files")
     return files if state.get("version") == VERSION and isinstance(files, dict) else {}
 
 
-def _save(mem: Path, files: dict) -> None:
+def _save(mem: Path | None, files: dict) -> None:
+    if mem is None:
+        return
     try:
         write_json_atomic(Path(mem) / INDEX_FILE, {"version": VERSION, "files": files})
     except OSError:
@@ -517,7 +521,7 @@ def file_entry(root: Path, mem: Path, full: str, rel: str | None = None) -> dict
     entry = files.get(rel) if rel is not None else None
     if not _fresh(entry, st):
         entry = _parse_file(full, st, lang_of(full))
-        if rel is not None:
+        if rel is not None and files.get(rel) != entry:  # a parallel hook may have stored it already
             files[rel] = entry
             _save(mem, files)
     return entry
@@ -552,7 +556,7 @@ def _fit(lines: list[str], cap: int, more: str) -> str:
 
 
 def outline_body(entry: dict, cap: int,
-                 more: str = "... {n} more symbols - use code_find, or Read with offset and limit") -> str:
+                 more: str = "... {n} more symbols - read the lines you need with offset and limit") -> str:
     lines = outline_lines(entry)
     if not lines:
         return "(no definitions found)"
@@ -666,7 +670,7 @@ def big_read_steer(payload: dict, root: Path, mem: Path, now) -> tuple[str, dict
     if not readguard.deny_once(payload, mem, now, lines=entry["lines"]):
         return None
     room = STEER_CHARS - len(STEER_REASON.format(n=entry["lines"], outline=""))  # the whole reason fits the cap
-    body = outline_body(entry, room, "… {n} more symbols — use code_outline")
+    body = outline_body(entry, room, "... {n} more symbols")
     event = {"type": "big_read_steer", "lines": entry["lines"], "outline_chars": len(body),
              "session": payload.get("session_id")}
     return STEER_REASON.format(n=entry["lines"], outline=body), event

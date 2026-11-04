@@ -152,33 +152,58 @@ SUMMARY_FILE = "summary.json"
 SUMMARY_PENDING_REFRESH_SECONDS = 600
 
 
-def _events_signature(mem_dir: Path) -> list[int] | None:
+_FRESH_MARK = b'"fresh_start"'
+
+
+def _fresh_signature(mem_dir: Path, old: dict) -> list[int] | None:
+    """[fresh_start events seen, bytes of events.jsonl scanned]; only the new tail is read.
+
+    Read, steer, related-memory and guard events never change the summary, so they must not
+    trigger a transcript scan; only a new fresh_start does."""
+    path = Path(mem_dir) / EVENTS_FILE
     try:
-        st = (Path(mem_dir) / EVENTS_FILE).stat()
+        size = path.stat().st_size
     except OSError:
-        return None
-    return [st.st_mtime_ns, st.st_size]
+        return [0, 0]  # no events yet
+    prev = old.get("fresh_events")
+    count, start = 0, 0
+    if (isinstance(prev, list) and len(prev) == 2 and all(isinstance(v, int) and not isinstance(v, bool) for v in prev)
+            and 0 <= prev[1] <= size):
+        count, start = prev
+    if start < size:
+        begin = max(0, start - (len(_FRESH_MARK) - 1))  # a mark cut in two at the old end is still counted once
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(begin)
+                count += fh.read(size - begin).count(_FRESH_MARK)
+        except OSError:
+            return None
+    return [count, size]
 
 
 def refresh_summary(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int, now: datetime) -> bool:
     """Write summary.json (measured-saved totals) for the status line, which must never scan transcripts.
 
-    Recomputed only when events.jsonl changed since the last summary, or every 10 minutes while a
-    fresh start still waits for its first reply. Returns True when it was recomputed."""
+    Recomputed only when a fresh_start event was logged since the last summary, or every 10 minutes
+    while a fresh start still waits for its first reply. Returns True when it was recomputed."""
     from memgraph.graph import write_json_atomic
     from memgraph.ingest import load_state
 
     mem_dir = Path(mem_dir)
     old = load_state(mem_dir / SUMMARY_FILE)
-    sig = _events_signature(mem_dir)
+    sig = _fresh_signature(mem_dir, old)
+    old_sig = old.get("fresh_events")
     updated = parse_ts(old.get("updated")) if isinstance(old.get("updated"), str) else None
-    if updated is not None and old.get("events") == sig:
+    same = isinstance(old_sig, list) and sig is not None and old_sig[:1] == sig[:1]
+    if updated is not None and same:
+        if sig != old_sig:
+            write_json_atomic(mem_dir / SUMMARY_FILE, dict(old, fresh_events=sig))  # remember the scanned tail
         pending = _int(old.get("fresh_starts_pending")) or 0
         if not pending or (now - updated).total_seconds() < SUMMARY_PENDING_REFRESH_SECONDS:
             return False
     t = measure_savings(transcripts_dir, mem_dir, ttl_minutes)["totals"]
     write_json_atomic(mem_dir / SUMMARY_FILE, {
-        "updated": now.isoformat(timespec="seconds"), "events": sig,
+        "updated": now.isoformat(timespec="seconds"), "fresh_events": sig,
         "measured_saved_tokens": t["measured_saved_tokens"], "measured_saved_usd": t["measured_saved_usd"],
         "fresh_starts": t["fresh_starts"], "fresh_starts_pending": t["fresh_starts_pending"]})
     return True

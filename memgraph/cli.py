@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
-from memgraph.store import load_state, memory_dir, project_root
+from memgraph.store import existing_memory_dir, load_state, memory_dir, memory_path, project_root
 
 if TYPE_CHECKING:
     from memgraph.graph import Graph
@@ -309,7 +309,7 @@ def _opt(args: list[str], name: str) -> str | None:
 def _transcripts(args: list[str]) -> tuple[Path, Path]:
     from memgraph.usage import transcripts_dir_for
 
-    mem = memory_dir(Path.cwd())
+    mem = memory_path(Path.cwd())  # read-only lookups: never create a memory folder here
     given = _opt(args, "--transcripts")
     return (Path(given).expanduser() if given else transcripts_dir_for(Path.cwd(), mem)), mem
 
@@ -382,6 +382,7 @@ def _code(cmd: str, args: list[str], stdout: TextIO) -> int:
     from memgraph import codeindex
 
     root = project_root(Path.cwd())
+    mem = existing_memory_dir(root)  # the cache is used when there is one; never created by a lookup
     limit = _opt(args, "--limit")
     words = [a for i, a in enumerate(args) if a != "--limit" and (i == 0 or args[i - 1] != "--limit")]
     if not words:
@@ -390,10 +391,10 @@ def _code(cmd: str, args: list[str], stdout: TextIO) -> int:
         return 2
     try:
         if cmd == "outline":
-            text = codeindex.outline(root, memory_dir(root), " ".join(words))
+            text = codeindex.outline(root, mem, " ".join(words))
         else:
             n = int(limit) if limit and limit.isdigit() else 20
-            text = codeindex.find(root, memory_dir(root), " ".join(words), limit=n)
+            text = codeindex.find(root, mem, " ".join(words), limit=n)
     except ValueError as e:
         stdout.write(f"{e}\n")
         return 2
