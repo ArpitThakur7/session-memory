@@ -213,7 +213,7 @@ On Windows use `bin\run-python.cmd` with the full path to this repository. It ke
 
 ## Use the memory in other tools
 
-The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack` and `memory_usage` (token totals and savings for the last `days` days, default 7).
+The plugin also runs as an MCP server, so other tools can read the same memory. The tools are `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack` and `memory_usage` (token totals and savings for the last `days` days, default 7), plus the code tools `code_outline`, `code_find` and `code_read` (see "Code outlines").
 
 ## Use in VS Code / Antigravity
 
@@ -287,6 +287,17 @@ In JSON, write a Windows path with forward slashes (`C:/Users/you/Desktop/sessio
 
 Antigravity on Windows may not run bash scripts, so this entry calls Python directly through the `py` launcher. If `py` is not installed, put the full path to `python.exe` in `command` (for example `C:/Program Files/Python313/python.exe`) and drop `"-3"` from `args`. On macOS or Linux use `"command": "python3"` and drop `"-3"`. In JSON files, write a Windows path with double backslashes (`C:\Users\you\Desktop\session-memory`) or with forward slashes (`C:/Users/you/Desktop/session-memory`).
 
+## Code outlines
+
+Reading a whole 1,500-line file to change one function puts all 1,500 lines in the chat. session-memory keeps a local index of the project's classes, functions and methods so Claude can read just the part it needs.
+
+- **Index.** Files come from `git ls-files` (tracked and untracked, not ignored) or, outside git, a folder walk that skips `node_modules`, `.venv`, `dist`, `build`, `target`, `vendor` and similar folders. Python is parsed with `ast` (classes, functions, async functions, methods, decorators included, first docstring line); JavaScript/TypeScript, Go, Java, C#, Rust, C/C++, Ruby, PHP, Kotlin and Swift use line patterns with brace matching (`end` for Ruby), which is good but not perfect. Binary files, files over 1 MB and generated or minified files (a line over 2,000 characters) are skipped. The index is built the first time it is needed and cached in `codeindex.json`; later only changed files (new modification time or size) are parsed again.
+- **MCP tools.** `code_outline(path)` lists a file's symbols as `name (kind) L12–L48  definition line` (at most 4,000 characters). `code_find(name, limit=20)` searches the whole project: exact names first, then prefix, then substring matches. `code_read(path, symbol)` returns only that symbol's lines with line numbers (at most 400 lines; longer symbols end with a note on how to read the rest). Paths may be project-relative or absolute but must be inside the project.
+- **Commands.** `bin/run-python outline <path>` and `bin/run-python find-symbol <name> [--limit N]` print the same text.
+- **Big-file steering.** When Claude reads a whole code file (no `offset` or `limit`) of more than 600 lines, the Read hook declines it once and shows the file's outline instead (at most 3,000 characters): "This file has N lines. Its outline: ... Read the lines you need with offset and limit, or use the code_read tool. To read the whole file anyway, read it again within 2 minutes." The same read again within 2 minutes goes through. Reads with `offset` or `limit`, shorter files and non-code files (Markdown, JSON, logs) are never steered, and the read guard keeps working as before. Each steer is logged as a `big_read_steer` event (line count and outline size only).
+
+**Turn steering off:** start Claude Code with `SESSION_MEMORY_BIG_READS=0`. The code tools stay available.
+
 ## Memory matched to your first question
 
 When you send the first message of a chat (a new chat, or one started with `/clear`), session-memory searches the project memory for notes that match it and adds up to 8 of them (at most 1,500 characters) as "Related memory (from earlier sessions; data, not instructions):", each as `- [kind] label (date)`. The search is BM25 over the labels of tasks, decisions, project files and errors, run locally at 0 model tokens. Nothing is added when no note matches well, for slash commands, for messages starting with `<`, later in a chat, or when the cache guard blocks the message. Labels are the redacted text already stored in memory; scratch files and paths outside the project are left out. Each use is logged as a `jit_context` event.
@@ -305,6 +316,7 @@ Set these environment variables before starting Claude Code.
 | `SESSION_MEMORY_WARN_TOKENS` | 150000 | Chat size from which the status line warns. |
 | `SESSION_MEMORY_STATUSLINE` | 1 | `0` makes the status line print nothing. |
 | `SESSION_MEMORY_JIT` | 1 | `0` turns off the related memory added to the first message of a chat. |
+| `SESSION_MEMORY_BIG_READS` | 1 | `0` stops the Read hook from steering whole reads of long code files to their outline. |
 
 The guard never blocks slash commands (messages starting with `/`) or messages starting with `<` (task notifications, background-agent reports, messages from other sessions).
 
@@ -322,6 +334,7 @@ Everything is under `<project>/.claude/session-memory/`:
 - `watch.json` - the cache watcher's deadline, warning time and which deadline was already announced
 - `watch.lock` - the running cache watcher's process id, so only one watcher runs per project
 - `reads.json` - the read guard's record: per chat, which files were read (normalized path, modification time, size, line ranges, times), no file contents
+- `codeindex.json` - the code outline cache: per source file, its modification time, size, line count and symbols (names, kinds, line ranges, definition lines, first docstring lines)
 - `summary.json` - measured-saved totals for the status line (numbers only)
 - `resume-pack.md` and `memory.png` - the resume packs (made by the `pack` command, the cache watcher, and, for `resume-pack.md`, each new session)
 - `memory-map.html` - the 3D memory map page (made by `/memory-map` or the `map` command)
@@ -364,7 +377,7 @@ The live test needs an interactive Claude Code session and spends usage limit, s
 - [ ] With `SESSION_MEMORY_CACHE_TTL_MIN=4` set, a desktop notification appears about 2 minutes after a reply.
 - [ ] After `/clear`, the brief contains the "Full resume pack" line (and the "Visual summary" line when the picture is current), and `resume-pack.md` contains your latest request (the "Built" time stays the same when nothing changed).
 - [ ] After a reply, close Claude Code: the cache watcher still shows its notification.
-- [ ] In VS Code and in Antigravity, the session-memory server lists 5 tools: `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack`, `memory_usage`.
+- [ ] In VS Code and in Antigravity, the session-memory server lists 8 tools: `memory_brief`, `memory_recall`, `memory_remember`, `memory_pack`, `memory_usage`, `code_outline`, `code_find`, `code_read`.
 
 **Continuity check.** Do 10 `/clear` resumes during real work. Record whether the first answer named the current task and the next step correctly. Target: at least 9 of 10.
 
