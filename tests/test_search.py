@@ -210,3 +210,29 @@ def test_path_scrub_git_bash_and_posix_paths():
     assert search._scrub("cat /home/bob/.ssh/id_rsa: denied", win) == "cat [path]: denied"
     assert search._scrub("open C:/Users/x/proj/b.py, then", win) == "open b.py, then"
     assert search._scrub("type D:/secret/key.txt: denied", win) == "type [path]: denied"
+
+
+def test_long_errors_with_generic_words_only_are_not_hits():
+    g = Graph()
+    head = ("Exit code 126 Error: Current working directory has a path longer than allowed for a Win32 working "
+            "directory. Can't start native Windows application")
+    g.add_node("error", "e1", head + " (line 12): nothing was started", "2026-11-02T00:00:00Z")
+    g.add_node("error", "e2", head + " (line 40): nothing was started", "2026-11-02T01:00:00Z")
+    g.add_node("task", "t", "make the status line show cache time", "2026-11-01T00:00:00Z")
+    for i in range(30):
+        g.add_node("task", f"o{i}", f"unrelated billing chore {i}", "2026-09-01T00:00:00Z")
+    prompt = "why does the status line show nothing on windows"
+    assert not [n for n, _, _ in search.search(g, prompt) if n["kind"] == "error"]
+    text, _ = search.related_memory(g, prompt)
+    assert "[error]" not in text
+
+
+def test_dedupe_uses_the_displayed_label():
+    g = Graph()
+    head = "Exit code 126 cachewatch notification failed " + "x" * 150
+    g.add_node("error", "e1", head + " tail one", "2026-11-02T00:00:00Z")
+    g.add_node("error", "e2", head + " tail two", "2026-11-02T01:00:00Z")
+    for i in range(30):
+        g.add_node("task", f"o{i}", f"unrelated billing chore {i}", "2026-09-01T00:00:00Z")
+    text, hits = search.related_memory(g, "cachewatch notification")
+    assert hits == 1 and text.count("[error]") == 1

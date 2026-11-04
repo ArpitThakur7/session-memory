@@ -19,8 +19,11 @@ MAX_HITS = 8
 MAX_CHARS = 1500
 MIN_SCORE = 1.5
 MAX_ERRORS = 2        # errors repeat a lot; never let them crowd out tasks and decisions
-MIN_ERROR_TERMS = 2   # an error must match at least this many different words of the question
+MIN_ERROR_TERMS = 2   # an error must match at least this many different non-generic words of the question
 _LABEL_CHARS = 140
+# Words nearly every error message contains: they never count towards an error hit.
+_GENERIC_ERROR_WORDS = ("line lines error errors code exit file files path windows window command run show nothing "
+                        "work working current allow allowed native start")
 K1, B = 1.2, 0.75
 KINDS = ("task", "decision", "file", "error")
 WEIGHTS = {"decision": 1.4, "file": 1.3, "error": 1.1, "task": 1.0}
@@ -54,6 +57,13 @@ def tokenize(text) -> list[str]:
         parts = [p for p in w.split("_") if len(p) >= 3]
         out.extend(stem(p) for p in parts if p not in _STOP)
     return [t for t in out if t not in _STOP]
+
+
+_GENERIC_ERROR_TERMS = frozenset(stem(w) for w in _GENERIC_ERROR_WORDS.split())
+
+
+def _shorten(shown: str) -> str:
+    return shown if len(shown) <= _LABEL_CHARS else shown[:_LABEL_CHARS - 3] + "..."
 
 
 def enabled() -> bool:
@@ -125,7 +135,8 @@ def search(graph, prompt: str, root: Path | None = None, limit: int = MAX_HITS) 
             f = tf.get(t)
             if not f:
                 continue
-            matched += 1
+            if node.get("kind") != "error" or t not in _GENERIC_ERROR_TERMS:
+                matched += 1
             idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
             score += idf * f * (K1 + 1) / (f + K1 * (1 - B + B * dl / avg))
         score *= WEIGHTS.get(node.get("kind"), 1.0)
@@ -135,7 +146,7 @@ def search(graph, prompt: str, root: Path | None = None, limit: int = MAX_HITS) 
     out, seen, errors = [], set(), 0
     for hit in scored:
         node, shown, _score = hit
-        key = (node.get("kind"), _DIGITS.sub("#", shown.casefold()))
+        key = (node.get("kind"), _DIGITS.sub("#", _shorten(shown).casefold()))  # as displayed
         if key in seen:
             continue  # the same note with other numbers (exit codes, line numbers, counts)
         if node.get("kind") == "error":
@@ -161,7 +172,7 @@ def related_memory(graph, prompt: str, root: Path | None = None) -> tuple[str, i
     lines, hits = [HEADER], 0
     size = len(HEADER)
     for node, shown, _score in search(graph, prompt, root):
-        shown = shown if len(shown) <= _LABEL_CHARS else shown[:_LABEL_CHARS - 3] + "..."
+        shown = _shorten(shown)
         date = fmt_local(node.get("last"))[:10]
         line = f"- [{node.get('kind')}] {shown}" + (f" ({date})" if date else "")
         if size + 1 + len(line) > MAX_CHARS:
