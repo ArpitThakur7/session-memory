@@ -186,10 +186,12 @@ def local_skills(project: Path, home: Path) -> int:
 # ------------------------------------------------------------ events
 
 def week_events(mem_dir: Path, now: datetime) -> dict:
-    """Counts of the plugin's own savings events in the last 7 days (read from events.jsonl)."""
+    """Counts of the plugin's own events in the last 7 days (read from events.jsonl).
+
+    Denials and steers that were read anyway (`read_retry`) are subtracted: they saved nothing."""
     since = now - timedelta(days=WEEK_DAYS)
     res = {"read_denied": 0, "big_read_steers": 0, "steer_outline_chars": 0, "steer_file_lines": 0,
-           "related_memory": 0, "related_memory_chars": 0}
+           "related_memory": 0, "related_memory_chars": 0, "read_retries": 0, "steer_retries": 0}
     for ev in read_events(mem_dir):
         ts = parse_ts(ev.get("t")) if isinstance(ev.get("t"), str) else None
         if ts is None or ts < since:
@@ -209,6 +211,14 @@ def week_events(mem_dir: Path, now: datetime) -> dict:
         elif kind == "jit_context":
             res["related_memory"] += 1
             res["related_memory_chars"] += num("chars")
+        elif kind == "read_retry" and ev.get("kind") == "guard":
+            res["read_retries"] += 1
+        elif kind == "read_retry" and ev.get("kind") == "steer":
+            res["steer_retries"] += 1
+            res["steer_file_lines"] -= num("lines")
+    res["read_denied"] = max(0, res["read_denied"] - res["read_retries"])
+    res["big_read_steers"] = max(0, res["big_read_steers"] - res["steer_retries"])
+    res["steer_file_lines"] = max(0, res["steer_file_lines"])
     return res
 
 
@@ -290,11 +300,15 @@ def format_audit(res: dict) -> str:
     out += ["", "Biggest things to trim (estimates):"]
     out += [f"{i}. {s_['text']}" for i, s_ in enumerate(res["suggestions"], 1)] or ["Nothing large found."]
     w = res["this_week"]
+    def anyway(n):
+        return f" ({n} more read again anyway)" if n else ""
+
     out += ["", "What this plugin saved this week:",
-            f"- repeated reads declined: {w['read_denied']}",
-            f"- big-file steers: {w['big_read_steers']} (outlines of {w['steer_outline_chars']:,} characters "
-            f"instead of files of {w['steer_file_lines']:,} lines)",
-            f"- related memory added to a first question: {w['related_memory']} ({w['related_memory_chars']:,} characters)"]
+            f"- repeated reads declined: {w['read_denied']}{anyway(w['read_retries'])}",
+            f"- big-file steers: {w['big_read_steers']}{anyway(w['steer_retries'])} (outlines of "
+            f"{w['steer_outline_chars']:,} characters sent instead of files of {w['steer_file_lines']:,} lines)",
+            "", "What it added this week:",
+            f"- related memory for a first question: {w['related_memory']} ({w['related_memory_chars']:,} characters)"]
     return "\n".join(out)
 
 

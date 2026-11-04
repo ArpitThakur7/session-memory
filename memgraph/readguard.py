@@ -7,7 +7,10 @@ file's mtime_ns and size, the line ranges read with their times, and the compact
 reads.json in the project's memory folder. A request is denied only when the file is unchanged,
 the lines were read in the last 45 minutes (older tool results may have been cleared from the
 context) and no compaction has happened since. A second identical request within 2 minutes of
-a denial is allowed, so Claude can always get the file back. Anything odd (missing or > 2 MB
+a denial is allowed, so Claude can always get the file back; that retry is logged as a
+`read_retry` event so the savings count is not overstated. Big-file steering (`deny_once`)
+gives each path's outline once per chat: a path steered, retried or read whole is kept in the
+scope's `steered` list until compaction. Anything odd (missing or > 2 MB
 file, unparseable offset/limit, bad input) is allowed. SESSION_MEMORY_READ_GUARD=0 turns it off.
 """
 from __future__ import annotations
@@ -170,6 +173,30 @@ def _clock(at: float) -> str:
     return datetime.fromtimestamp(at, _LOCAL_TZ).strftime("%H:%M")
 
 
+def _log_retry(mem: Path, payload: dict, kind: str, **extra) -> None:
+    """A denial or steer that was read anyway: `audit` subtracts these from what was saved."""
+    from memgraph.store import append_event
+
+    try:
+        append_event(mem, {"type": "read_retry", "kind": kind, "session": payload.get("session_id"), **extra})
+    except Exception:
+        pass  # counting is best effort; the read itself is allowed either way
+
+
+def _steered(entry: dict) -> list:
+    value = entry.get("steered")
+    if not isinstance(value, list):
+        value = entry["steered"] = []
+    return value
+
+
+def _mark_steered(entry: dict, key: str) -> None:
+    steered = _steered(entry)
+    if key not in steered:
+        steered.append(key)
+        del steered[:-MAX_PATHS]
+
+
 def _current(rec, st, epoch: int) -> bool:
     return (isinstance(rec, dict) and rec.get("mtime_ns") == st.st_mtime_ns and rec.get("size") == st.st_size
             and rec.get("compact_epoch") == epoch)
@@ -183,8 +210,9 @@ def _retry(rec: dict, start: int, end: int, t: float) -> bool:
             and 0 <= t - denied[2] <= RETRY_SECONDS)
 
 
-def deny_once(payload: dict, mem: Path, now: datetime) -> bool:
-    """For other Read denials (big-file steering): True to deny now, False for the retry within 2 minutes.
+def deny_once(payload: dict, mem: Path, now: datetime, lines: int | None = None) -> bool:
+    """For big-file steering: True to deny now; False for the retry within 2 minutes and for a path
+    already steered (or read whole) in this chat since the last compaction.
 
     Uses the read guard's denial marker, so it works even when the read guard itself is off."""
     target = _target(payload, guard=False)
@@ -197,9 +225,14 @@ def deny_once(payload: dict, mem: Path, now: datetime) -> bool:
     rec = files.get(key)
     if not isinstance(rec, dict):
         rec = files[key] = {}
-    if _retry(rec, start, end, t):
+    if _retry(rec, start, end, t) and rec.get("denied_by") == "steer":
+        _log_retry(mem, payload, "steer", lines=lines)
+        return False
+    if key in _steered(entry):
         return False
     rec["denied"] = [start, end, t]
+    rec["denied_by"] = "steer"
+    _mark_steered(entry, key)
     entry["seen"] = t
     _prune(state)
     _save(mem, state)
@@ -222,8 +255,11 @@ def check(payload: dict, mem: Path, now: datetime) -> str | None:
     if at is None:
         return None
     if _retry(rec, start, end, t):
+        if rec.get("denied_by", "guard") == "guard":
+            _log_retry(mem, payload, "guard")
         return None  # asked again right after a denial: let it through (PostToolUse records it)
     rec["denied"] = [start, end, t]
+    rec["denied_by"] = "guard"
     entry["seen"] = t
     _save(mem, state)
     return REASON.format(file=file_path, at=_clock(at))
@@ -244,6 +280,9 @@ def record(payload: dict, mem: Path, now: datetime) -> None:
     ranges = [r for r in old if r[2] >= t - FRESH_SECONDS and r[:2] != [start, end]] + [[start, end, t]]
     files[key] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size, "ranges": ranges[-MAX_RANGES:],
                   "compact_epoch": epoch}
+    tool_input = payload["tool_input"]
+    if tool_input.get("offset") is None and tool_input.get("limit") is None:
+        _mark_steered(entry, key)  # the whole file is in the chat: an outline would only repeat it
     if len(files) > MAX_PATHS:
         def last(k):
             rs = _ranges(files[k].get("ranges")) if isinstance(files[k], dict) else []
@@ -264,4 +303,7 @@ def bump_compaction(payload: dict, mem: Path) -> None:
     epochs = state.get("epochs") if isinstance(state.get("epochs"), dict) else {}
     epochs[scope] = _epoch(state, scope) + 1
     state["epochs"] = epochs
+    entry = state.get("scopes", {}).get(scope) if isinstance(state.get("scopes"), dict) else None
+    if isinstance(entry, dict):
+        entry.pop("steered", None)  # the outline left the context too
     _save(mem, state)

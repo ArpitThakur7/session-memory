@@ -119,6 +119,15 @@ def test_retry_within_two_minutes_allowed_then_denied_again(proj):
     assert denied(hook(payload(proj), T0 + timedelta(minutes=10)))
 
 
+def test_retry_is_logged_as_read_retry(proj):
+    hook(payload(proj))
+    assert denied(hook(payload(proj), T0 + timedelta(minutes=5)))
+    assert hook(payload(proj), T0 + timedelta(minutes=6)) == ""
+    lines = (proj / ".claude" / "session-memory" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    kinds = [(e["type"], e.get("kind")) for e in map(json.loads, filter(str.strip, lines))]
+    assert kinds == [("read_denied", None), ("read_retry", "guard")]
+
+
 def test_retry_after_two_minutes_still_denied(proj):
     hook(payload(proj))
     assert denied(hook(payload(proj), T0 + timedelta(minutes=5)))

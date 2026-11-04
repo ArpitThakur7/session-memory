@@ -663,7 +663,7 @@ def big_read_steer(payload: dict, root: Path, mem: Path, now) -> tuple[str, dict
         return None
     from memgraph import readguard
 
-    if not readguard.deny_once(payload, mem, now):
+    if not readguard.deny_once(payload, mem, now, lines=entry["lines"]):
         return None
     room = STEER_CHARS - len(STEER_REASON.format(n=entry["lines"], outline=""))  # the whole reason fits the cap
     body = outline_body(entry, room, "… {n} more symbols — use code_outline")

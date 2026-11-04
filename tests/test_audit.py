@@ -133,12 +133,17 @@ def test_run_audit_with_fake_claude(tmp_path, monkeypatch):
     events = [{"t": "2026-11-03T10:00:00+00:00", "type": "read_denied"},
               {"t": "2026-11-03T10:00:00+00:00", "type": "big_read_steer", "lines": 900, "outline_chars": 700},
               {"t": "2026-11-03T10:00:00+00:00", "type": "jit_context", "chars": 300, "hits": 2},
+              {"t": "2026-11-03T10:05:00+00:00", "type": "read_denied"},
+              {"t": "2026-11-03T10:06:00+00:00", "type": "read_retry", "kind": "guard"},
+              {"t": "2026-11-03T10:07:00+00:00", "type": "big_read_steer", "lines": 650, "outline_chars": 400},
+              {"t": "2026-11-03T10:07:30+00:00", "type": "read_retry", "kind": "steer", "lines": 650},
               {"t": "2026-10-01T10:00:00+00:00", "type": "read_denied"}]
     (mem / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
     res = audit.run_audit(proj, make_transcripts(tmp_path), home, NOW)
     assert res["start"]["median"] == 9010
-    assert res["this_week"] == {"read_denied": 1, "big_read_steers": 1, "steer_outline_chars": 700,
-                                "steer_file_lines": 900, "related_memory": 1, "related_memory_chars": 300}
+    assert res["this_week"] == {"read_denied": 1, "big_read_steers": 1, "steer_outline_chars": 1100,
+                                "steer_file_lines": 900, "related_memory": 1, "related_memory_chars": 300,
+                                "read_retries": 1, "steer_retries": 1}
     assert [p["name"] for p in res["plugins"]] == ["big@m", "small@m"] and res["plugins"][0]["tokens"] == 3200
     assert ("plugin", "details", "off@m") not in calls
     assert [s["item"] for s in res["suggestions"]] == ["big@m", str(home / ".claude" / "CLAUDE.md")]
@@ -147,6 +152,9 @@ def test_run_audit_with_fake_claude(tmp_path, monkeypatch):
     text = audit.format_audit(res)
     assert "starts at about 9,010 tokens before your first message is answered (measured from 3 chats" in text
     assert "(estimate)" in text and "MCP server local: 12 tools" in text
+    saved, added = text.split("What this plugin saved this week")[1].split("What it added this week")
+    assert "repeated reads declined: 1 (1 more read again anyway)" in saved and "related memory" not in saved
+    assert "related memory for a first question: 1 (300 characters)" in added
 
 
 def test_plugin_cap(monkeypatch, tmp_path):

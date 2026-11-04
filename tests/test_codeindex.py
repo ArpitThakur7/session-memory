@@ -431,10 +431,28 @@ def test_big_code_read_steered_once_then_allowed(proj):
     assert len(steer) == 1 and steer[0]["lines"] == 800 and steer[0]["outline_chars"] == len(outline)
 
 
-def test_steering_retry_after_two_minutes_is_steered_again(proj):
+def test_steered_path_is_not_steered_again_in_this_chat(proj):
     path = big_file(proj)
     assert reason_of(read(payload(proj, path)))
-    assert reason_of(read(payload(proj, path), T0 + timedelta(minutes=3)))
+    later = T0 + timedelta(minutes=3)
+    assert read(payload(proj, path), later) == ""  # the outline was given once; no second steer
+    assert reason_of(read(payload(proj, path, session="s2"), later))  # another chat is steered
+    run("hook-compact", {"session_id": "s1", "cwd": str(proj), "transcript_path": str(proj / "t.jsonl")},
+        later + timedelta(minutes=1))
+    assert reason_of(read(payload(proj, path), later + timedelta(minutes=2)))  # compaction: outline is gone
+
+
+def test_steer_retry_is_logged_and_never_steered_again(proj, monkeypatch):
+    monkeypatch.setenv("SESSION_MEMORY_READ_GUARD", "0")
+    path = big_file(proj)
+    assert reason_of(read(payload(proj, path)))
+    assert read(payload(proj, path), T0 + timedelta(seconds=30)) == ""
+    assert read(payload(proj, path), T0 + timedelta(minutes=10)) == ""
+    events = [json.loads(ln) for ln in (memory_dir(proj) / "events.jsonl").read_text(encoding="utf-8").splitlines()
+              if ln.strip()]
+    retries = [e for e in events if e["type"] == "read_retry"]
+    assert [(e["kind"], e["lines"]) for e in retries] == [("steer", 800)]
+    assert [e["type"] for e in events].count("big_read_steer") == 1
 
 
 def test_steering_skips_ranges_small_and_non_code(proj, monkeypatch):
