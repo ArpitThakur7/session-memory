@@ -213,7 +213,7 @@ An optional status line under the prompt box:
 Opus · chat 142k (71%) · cache 38m · saved 1.2M
 ```
 
-- **chat**: tokens in the chat now and the share of the context window. From `SESSION_MEMORY_WARN_TOKENS` (default 150000) it turns yellow and says `chat 162k — /compact or /clear soon`; past 1.5 times that, red.
+- **chat**: tokens in the chat now and the share of the context window. From `SESSION_MEMORY_WARN_TOKENS` (default 150000) it turns yellow and says `chat 162k — /compact or /clear soon`; past 1.5 times that, red. Windows larger than 200k tokens (1M) warn by share instead: yellow from 75%, red from 90%. Before the first reply it shows `chat —`.
 - **cache**: time until the prompt cache expires, from Claude Code's `prompt_cache.expires_at` field (Claude Code 2.1.251 or later), else from the cache watcher's deadline; `cache cold` once it has expired.
 - **saved**: measured tokens saved by fresh starts (the `savings` command's measured total), read from a small `summary.json` that the Stop hook refreshes. The status line never reads transcripts.
 
@@ -224,7 +224,7 @@ bin/run-python setup-statusline --dry-run   # show the change only
 bin/run-python setup-statusline             # add it (a backup of settings.json is saved first)
 ```
 
-On Windows use `bin\run-python.cmd` with the full path to this repository. It keeps every other setting, refuses a file that is not valid JSON, and refuses to replace a different status line unless you add `--force`. `doctor` shows whether it is set. To remove it, delete the `statusLine` entry from the settings file (or set `SESSION_MEMORY_STATUSLINE=0` to make it print nothing).
+On Windows use `bin\run-python.cmd` with the full path to this repository. Claude Code gives a status line no `CLAUDE_PLUGIN_ROOT`, so setup writes a small shim (`session-memory/statusline.py`, plus `statusline.sh` and `statusline.cmd`) next to the settings file and points the status line at it. The shim runs the checkout you ran setup from, or, when that was a plugin install, the newest install under `plugins/cache/*/session-memory/*`, so plugin updates do not break it. Setup keeps every other setting, refuses a file that is not valid JSON, and refuses to replace a different status line unless you add `--force`. `doctor` shows whether it is set, and that the shim is there and finds an install. To remove it, delete the `statusLine` entry from the settings file (or set `SESSION_MEMORY_STATUSLINE=0` to make it print nothing).
 
 ## Use the memory in other tools
 

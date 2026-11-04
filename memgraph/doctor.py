@@ -215,6 +215,14 @@ def _check_statusline(ctx) -> dict:
     if current is None:
         return _check("statusline", "skip", "Status line not set (optional)", fix)
     if is_ours(current):
+        from memgraph.statusline import entry, shim_problem
+
+        if current != entry(ctx["home"]):
+            return _check("statusline", "fail", "Status line points at the plugin folder directly (breaks on "
+                          "plugin updates)", f"{_cli()} setup-statusline (writes a stable shim)")
+        problem = shim_problem(ctx["home"])
+        if problem:
+            return _check("statusline", "fail", f"Status line set but {problem}", f"{_cli()} setup-statusline")
         return _check("statusline", "ok", f"Status line set ({path})")
     return _check("statusline", "skip", "Another status line is set (kept as is)",
                   f"{_cli()} setup-statusline --force to replace it (a backup is kept)")

@@ -6,8 +6,11 @@ memory folder. Field names follow code.claude.com/docs/en/statusline: model.disp
 context_window.{current_usage,total_input_tokens,context_window_size,used_percentage},
 prompt_cache.{warm,expires_at} (epoch seconds), workspace.{current_dir,project_dir}, cwd.
 
-`setup-statusline` adds that command to ~/.claude/settings.json: backup first, printed diff,
---dry-run, refuses invalid JSON and someone else's status line (unless --force).
+`setup-statusline` writes a small stable shim to <config dir>/session-memory/ (statusline.py plus
+statusline.sh and statusline.cmd that start it with one Python) and points ~/.claude/settings.json
+at it: backup first, printed diff, --dry-run, refuses invalid JSON and someone else's status line
+(unless --force). The shim finds the current plugin install itself (CLAUDE_PLUGIN_ROOT is not set
+for status lines), so a plugin update never leaves the status line pointing at a deleted folder.
 """
 from __future__ import annotations
 
@@ -21,6 +24,8 @@ from typing import TextIO
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_WARN_TOKENS = 150_000
+BIG_WINDOW = 200_000          # larger windows (1M) warn by percentage, not by token count
+WARN_PERCENT, RED_PERCENT = 75, 90
 MAX_CHARS = 120
 SEP = " · "
 YELLOW, RED, RESET = "\x1b[33m", "\x1b[31m", "\x1b[0m"
@@ -99,6 +104,14 @@ def settings_path(home: Path | None = None) -> Path:
     return (Path(home) if home else Path.home()) / ".claude" / "settings.json"
 
 
+def _read_text(path: Path) -> str | None:
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return fh.read().replace("\r\n", "\n")
+    except OSError:
+        return None
+
+
 def _read_json(path: Path) -> dict:
     try:
         obj = json.loads(path.read_text(encoding="utf-8"))
@@ -138,10 +151,16 @@ def render(data: dict, now: datetime) -> str:
     if isinstance(model, str) and model.strip():
         model = model.strip()
         parts.append((model if len(model) <= 30 else model[:29] + "…", ""))
-    if tokens is not None:
-        warn = warn_tokens()
-        if tokens >= warn:
-            colour = RED if tokens >= 1.5 * warn else YELLOW
+    if tokens is not None and tokens <= 0:
+        parts.append(("chat —", ""))  # no reply yet: the size is not known
+    elif tokens is not None:
+        size = _num(_get(data, "context_window", "context_window_size"))
+        if size is not None and size > BIG_WINDOW and pct is not None:
+            colour = RED if pct >= RED_PERCENT else YELLOW if pct >= WARN_PERCENT else ""
+        else:
+            warn = warn_tokens()
+            colour = RED if tokens >= 1.5 * warn else YELLOW if tokens >= warn else ""
+        if colour:
             parts.append((f"chat {fmt_tokens(tokens)} — /compact or /clear soon", colour))
         else:
             parts.append((f"chat {fmt_tokens(tokens)}" + (f" ({round(pct)}%)" if pct is not None else ""), ""))
@@ -177,19 +196,143 @@ def statusline_main(stdin: TextIO, stdout: TextIO, now: datetime) -> int:
 USAGE = "Usage: setup-statusline [--dry-run] [--force]\n"
 
 
-def command() -> str:
-    """The launcher in this repository, quoted, plus `statusline` (works from cmd and bash)."""
-    launcher = (REPO / "bin" / ("run-python.cmd" if os.name == "nt" else "run-python")).as_posix()
-    return f'"{launcher}" statusline'
+SHIM_DIR = "session-memory"
+SHIM_FILES = ("statusline.py", "statusline.sh", "statusline.cmd")
+
+_SHIM_PY = """# session-memory status line shim, written by `setup-statusline` (run it again to rewrite this).
+# Status lines get no CLAUDE_PLUGIN_ROOT, so find the install here: the development checkout recorded
+# at setup when it still exists, else the newest plugin install in Claude Code's plugin cache.
+import glob
+import io
+import os
+import sys
+
+RECORDED = {recorded!r}
+CONFIG = {cfg!r}
 
 
-def entry() -> dict:
-    return {"type": "command", "command": command(), "padding": 0}
+def _ok(root):
+    return bool(root) and os.path.isfile(os.path.join(root, "memgraph", "cli.py"))
+
+
+def _root():
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or CONFIG
+    cache = os.path.normcase(os.path.abspath(os.path.join(cfg, "plugins", "cache")))
+    recorded = os.path.normcase(os.path.abspath(RECORDED))
+    if _ok(RECORDED) and not recorded.startswith(cache + os.sep):
+        return RECORDED
+    found = [d for d in glob.glob(os.path.join(glob.escape(cfg), "plugins", "cache", "*", "session-memory", "*"))
+             if _ok(d)]
+    if found:
+        return max(found, key=os.path.getmtime)
+    return RECORDED if _ok(RECORDED) else None
+
+
+def run():
+    if sys.version_info < (3, 10):
+        return 0
+    root = _root()
+    if root is None:
+        return 0
+    sys.path.insert(0, root)
+    from memgraph.cli import main
+
+    sys.stdout.reconfigure(encoding="utf-8")
+    return main(["statusline"], io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace"), sys.stdout)
+
+
+if __name__ == "__main__":
+    sys.exit(run())
+"""
+
+_SHIM_SH = """#!/usr/bin/env bash
+# session-memory status line shim (written by setup-statusline): one Python start, Store stub skipped.
+D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+shopt -s execfail
+for c in python3 python py; do
+  p="$(command -v "$c" 2>/dev/null)" || continue
+  case "$p" in *WindowsApps*) continue ;; esac
+  exec "$p" "$D/statusline.py"
+done
+exit 0
+"""
+
+_SHIM_CMD = """@echo off
+rem session-memory status line shim (written by setup-statusline): one Python start.
+where py >nul 2>&1
+if errorlevel 1 goto trypython
+py -3 "%~dp0statusline.py"
+if errorlevel 100 goto trypython
+exit /b 0
+:trypython
+python "%~dp0statusline.py"
+exit /b 0
+"""
+
+
+def shim_dir(home: Path | None = None) -> Path:
+    """Stable folder for the shim, next to the settings file (survives plugin updates)."""
+    return settings_path(home).parent / SHIM_DIR
+
+
+def shim_contents(recorded: Path = REPO, cfg: Path | None = None) -> dict[str, tuple[str, str]]:
+    """file name -> (text, newline) of the three shim files."""
+    cfg = Path(cfg) if cfg is not None else settings_path().parent
+    py = _SHIM_PY.replace("{recorded!r}", repr(str(recorded))).replace("{cfg!r}", repr(str(cfg)))
+    return {"statusline.py": (py, "\n"), "statusline.sh": (_SHIM_SH, "\n"), "statusline.cmd": (_SHIM_CMD, "\r\n")}
+
+
+def write_shim(folder: Path, recorded: Path = REPO, cfg: Path | None = None) -> Path:
+    """Write the shim files into `folder`; returns the path of statusline.py."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, (text, newline) in shim_contents(recorded, cfg).items():
+        target = folder / name
+        with open(target, "w", encoding="utf-8", newline=newline) as fh:
+            fh.write(text)
+        if name == "statusline.sh":
+            try:
+                target.chmod(0o755)
+            except OSError:
+                pass
+    return folder / "statusline.py"
+
+
+def command(home: Path | None = None) -> str:
+    """The shim for this platform, quoted (works from cmd and bash)."""
+    name = "statusline.cmd" if os.name == "nt" else "statusline.sh"
+    return f'"{(shim_dir(home) / name).as_posix()}"'
+
+
+def entry(home: Path | None = None) -> dict:
+    return {"type": "command", "command": command(home), "padding": 0}
 
 
 def is_ours(value) -> bool:
     cmd = value.get("command") if isinstance(value, dict) else None
-    return isinstance(cmd, str) and "run-python" in cmd and cmd.rstrip().endswith(" statusline")
+    if not isinstance(cmd, str):
+        return False
+    cmd = cmd.strip().strip('"').replace("\\", "/")
+    return (("run-python" in cmd and cmd.endswith(" statusline"))  # before the shim: the launcher itself
+            or cmd.endswith(f"{SHIM_DIR}/statusline.cmd") or cmd.endswith(f"{SHIM_DIR}/statusline.sh"))
+
+
+def shim_problem(home: Path | None = None) -> str | None:
+    """Why the installed shim cannot work (missing files, no install found), else None."""
+    folder = shim_dir(home)
+    missing = [n for n in SHIM_FILES if not (folder / n).is_file()]
+    if missing:
+        return f"shim files missing in {folder}: {', '.join(missing)}"
+    import importlib.util
+
+    try:
+        spec = importlib.util.spec_from_file_location("_sm_statusline_shim", folder / "statusline.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        root = mod._root()
+    except Exception as exc:  # a broken shim: report it, never raise
+        return f"shim cannot run ({type(exc).__name__})"
+    return None if root else "no session-memory install found for the shim"
 
 
 def _dump(data: dict) -> str:
@@ -204,7 +347,10 @@ def setup_statusline_main(args: list[str], out: TextIO, home: Path | None = None
         return 2
     dry_run, force = "--dry-run" in args, "--force" in args
     path = settings_path(home)
-    new_entry = entry()
+    new_entry = entry(home)
+    folder = shim_dir(home)
+    shim_text = {n: c for n, (c, _nl) in shim_contents(REPO, path.parent).items()}
+    shim_stale = any(_read_text(folder / n) != c for n, c in shim_text.items())
     snippet = json.dumps({"statusLine": new_entry}, indent=2)
     try:
         data = _load(path, "statusLine")
@@ -215,7 +361,7 @@ def setup_statusline_main(args: list[str], out: TextIO, home: Path | None = None
         out.write(f"Not changed: cannot read {path} ({exc}).\n")
         return 2
     current = data.get("statusLine")
-    if current == new_entry:
+    if current == new_entry and not shim_stale:
         out.write(f"Already set up: {path} uses the session-memory status line. Nothing to change.\n")
         return 0
     if current is not None and not is_ours(current) and not force:
@@ -228,12 +374,21 @@ def setup_statusline_main(args: list[str], out: TextIO, home: Path | None = None
     before = _dump(data).splitlines(keepends=True) if path.exists() else []
     diff = "".join(difflib.unified_diff(before, _dump(updated).splitlines(keepends=True),
                                         f"{path} (before)", f"{path} (after)", n=1))
-    out.write(f"{'Update' if current is not None else 'Add'} statusLine in {path} "
-              f"({'existing file' if path.exists() else 'new file'}):\n{diff}")
+    if shim_stale:
+        out.write(f"Write the status line shim (finds the current plugin install): "
+                  f"{', '.join(str(folder / n) for n in SHIM_FILES)}\n")
+    if current != new_entry:
+        out.write(f"{'Update' if current is not None else 'Add'} statusLine in {path} "
+                  f"({'existing file' if path.exists() else 'new file'}):\n{diff}")
     if dry_run:
         out.write("Dry run: nothing changed.\n")
         return 0
     try:
+        if shim_stale:
+            write_shim(folder, REPO, path.parent)
+        if current == new_entry:
+            out.write("Shim updated; settings unchanged.\n")
+            return 0
         if path.exists():
             backup = path.with_name(f"{path.name}.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak")
             shutil.copy2(path, backup)

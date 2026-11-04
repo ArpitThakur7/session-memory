@@ -1,6 +1,7 @@
 """Status line: one cheap line from Claude Code's stdin JSON; setup-statusline with a temp HOME only."""
 import io
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,10 +90,30 @@ def test_warning_yellow_then_red(tmp_path, monkeypatch):
     data["context_window"].update(total_input_tokens=162_000, used_percentage=81, current_usage=None)
     text = line(data)
     assert "\x1b[33m" in text and "chat 162k — /compact or /clear soon" in plain(text)
-    data["context_window"].update(total_input_tokens=230_000, context_window_size=1_000_000, used_percentage=23)
+    data["context_window"].update(total_input_tokens=230_000, used_percentage=None)
     assert "\x1b[31m" in line(data)
     monkeypatch.setenv("SESSION_MEMORY_WARN_TOKENS", "300000")
     assert "\x1b[" not in line(data)
+
+
+def test_big_windows_warn_by_percentage(tmp_path):
+    data = sample(tmp_path)
+    data["context_window"].update(total_input_tokens=230_000, context_window_size=1_000_000, used_percentage=23,
+                                  current_usage=None)
+    assert plain(line(data)).startswith("Opus · chat 230k (23%)") and "\x1b[" not in line(data)
+    data["context_window"].update(total_input_tokens=760_000, used_percentage=76)
+    text = line(data)
+    assert "\x1b[33m" in text and "chat 760k — /compact or /clear soon" in plain(text)
+    data["context_window"].update(total_input_tokens=920_000, used_percentage=92)
+    assert "\x1b[31m" in line(data)
+
+
+def test_before_first_reply_shows_dash(tmp_path):
+    data = sample(tmp_path)
+    del data["prompt_cache"]
+    data["context_window"] = {"total_input_tokens": 0, "context_window_size": 200_000, "used_percentage": 0,
+                              "current_usage": None}
+    assert plain(line(data)) == "Opus · chat —"
 
 
 def test_cache_cold_when_expired_or_not_warm(tmp_path):
@@ -188,7 +209,10 @@ def test_setup_creates_settings(home):
     data = json.loads(settings(home).read_text(encoding="utf-8"))
     entry = data["statusLine"]
     assert entry["type"] == "command" and entry["padding"] == 0
-    assert entry["command"].endswith(" statusline") and "run-python" in entry["command"]
+    shim_dir = home / ".claude" / "session-memory"
+    name = "statusline.cmd" if os.name == "nt" else "statusline.sh"
+    assert entry["command"] == '"' + (shim_dir / name).as_posix() + '"'
+    assert {p.name for p in shim_dir.iterdir()} == {"statusline.py", "statusline.sh", "statusline.cmd"}
     assert backups(home) == []
 
 
@@ -208,8 +232,9 @@ def test_setup_dry_run_changes_nothing(home):
     settings(home).parent.mkdir()
     settings(home).write_text('{"model": "opus"}', encoding="utf-8")
     rc, text = setup("--dry-run")
-    assert rc == 0 and "Dry run" in text and "statusLine" in text
+    assert rc == 0 and "Dry run" in text and "statusLine" in text and "statusline.py" in text
     assert settings(home).read_text(encoding="utf-8") == '{"model": "opus"}'
+    assert not (home / ".claude" / "session-memory").exists()
     assert backups(home) == []
 
 
@@ -260,9 +285,61 @@ def test_doctor_status_line_check(home, tmp_path, monkeypatch):
     setup()
     by = {c["name"]: c for c in doctor.run_checks(proj, home)}
     assert by["statusline"]["status"] == "ok"
+    (home / ".claude" / "session-memory" / "statusline.py").unlink()
+    by = {c["name"]: c for c in doctor.run_checks(proj, home)}
+    assert by["statusline"]["status"] == "fail" and "setup-statusline" in by["statusline"]["fix"]
     settings(home).write_text(json.dumps({"statusLine": {"type": "command", "command": "other"}}), encoding="utf-8")
     by = {c["name"]: c for c in doctor.run_checks(proj, home)}
     assert by["statusline"]["status"] == "skip" and "--force" in by["statusline"]["fix"]
+
+
+def test_old_launcher_entry_is_ours_and_upgraded(home):
+    settings(home).parent.mkdir()
+    old = {"type": "command", "command": '"C:/x/session-memory/bin/run-python.cmd" statusline', "padding": 0}
+    settings(home).write_text(json.dumps({"statusLine": old}), encoding="utf-8")
+    rc, text = setup()
+    assert rc == 0, text
+    assert "statusline." in json.loads(settings(home).read_text(encoding="utf-8"))["statusLine"]["command"]
+
+
+def _fake_install(base, label):
+    pkg = base / "memgraph"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "cli.py").write_text(f"def main(argv, stdin, stdout, now=None):\n    stdout.write({label!r} + ' ' + "
+                                f"' '.join(argv) + ' ' + stdin.read())\n    return 0\n", encoding="utf-8")
+    return base
+
+
+def _run_shim(shim, env):
+    import subprocess
+    import sys
+
+    r = subprocess.run([sys.executable, str(shim)], input="{}", capture_output=True, text=True, env=env,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_shim_runs_newest_plugin_install_or_recorded_checkout(tmp_path):
+    import shutil
+    import time
+
+    cfg = tmp_path / "cfg"
+    old = _fake_install(cfg / "plugins" / "cache" / "market" / "session-memory" / "0.2.0", "old")
+    new = _fake_install(cfg / "plugins" / "cache" / "market" / "session-memory" / "0.3.0", "new")
+    t0 = time.time()
+    os.utime(old, (t0 - 100, t0 - 100))
+    os.utime(new, (t0, t0))
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "CLAUDE_CONFIG_DIR")}
+    shim = sl.write_shim(tmp_path / "shim", recorded=old, cfg=cfg)  # recorded inside the cache: may be stale
+    assert _run_shim(shim, env) == "new statusline {}"
+    checkout = _fake_install(tmp_path / "checkout", "checkout")
+    shim = sl.write_shim(tmp_path / "shim", recorded=checkout, cfg=cfg)  # a development checkout wins
+    assert _run_shim(shim, env) == "checkout statusline {}"
+    shutil.rmtree(cfg / "plugins")
+    shutil.rmtree(checkout)
+    assert _run_shim(shim, env) == ""  # nothing installed: prints nothing, never fails
 
 
 def test_summary_recomputed_only_when_events_change(tmp_path, monkeypatch):
