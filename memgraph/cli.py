@@ -117,6 +117,29 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         if reason:
             _emit(stdout, {"decision": "block", "reason": reason})
             _log_event(mem, {"type": "guard_block", "session": payload.get("session_id"), "context": context})
+        else:
+            _related_memory(payload, mem, root, stdout)
+
+
+def _related_memory(payload: dict, mem: Path, root: Path, stdout: TextIO) -> None:
+    """First prompt of a chat: add the memory that matches it (not for slash commands or notifications)."""
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or prompt.startswith("/") or prompt.lstrip().startswith("<"):
+        return
+    from memgraph import search
+
+    if not search.enabled():
+        return
+    from memgraph.guard import has_reply
+
+    if has_reply(Path(payload["transcript_path"])):
+        return
+    from memgraph.graph import Graph
+
+    text, hits = search.related_memory(Graph.load(mem / "graph.json"), prompt, root)
+    if text:
+        _emit(stdout, {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}})
+        _log_event(mem, {"type": "jit_context", "session": payload.get("session_id"), "chars": len(text), "hits": hits})
 
 
 def _fresh_start(graph: Graph, payload: dict, brief: str) -> dict:

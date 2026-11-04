@@ -95,6 +95,24 @@ def last_activity(transcript_path: Path) -> tuple[datetime | None, int | None]:
     return newest, context
 
 
+def has_reply(transcript_path: Path) -> bool:
+    """True when the tail of the transcript holds a real (non-synthetic) assistant reply."""
+    try:
+        lines = _tail_lines(Path(transcript_path))
+    except Exception:
+        return False
+    for line in lines:
+        if '"assistant"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "assistant" and not is_synthetic(obj):
+            return True
+    return False
+
+
 def _utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
