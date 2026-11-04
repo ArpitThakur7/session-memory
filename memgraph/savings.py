@@ -268,7 +268,7 @@ def token_view(transcripts_dir: Path | None, mem_dir: Path, now: datetime | None
     """The map's "Tokens" data: last 14 days by day (local dates, empty days included),
     by model and by who, their totals, and the savings totals with the latest rows."""
     from memgraph.transcript import local_time
-    from memgraph.usage import summarize, totals
+    from memgraph.usage import helper_rows, summarize, totals
 
     if transcripts_dir is None or not Path(transcripts_dir).is_dir():
         return {"available": False, "reason": "No Claude Code transcripts found for this project."}
@@ -299,6 +299,7 @@ def token_view(transcripts_dir: Path | None, mem_dir: Path, now: datetime | None
         "days": days,
         "models": summarize(recent, "model"),
         "who": summarize(recent, "who"),
+        "helpers": helper_rows([r for r in recent if r.helper], transcripts_dir, limit=10),
         "savings": {"totals": sav["totals"], "fresh_starts": sav["fresh_starts"][-_MAP_ROWS:],
                     "cold_restarts": sav["cold_restarts"][-_MAP_ROWS:]},
         "tape": tape_view(usage, sav, ttl_minutes),

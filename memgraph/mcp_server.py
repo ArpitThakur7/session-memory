@@ -188,7 +188,8 @@ def _usage_text(args: dict, mem: Path, project: Path) -> str:
     from datetime import timedelta
 
     from memgraph.savings import measure_savings, savings_totals_line
-    from memgraph.usage import collect_usage, totals, totals_line, transcripts_dir_for
+    from memgraph.usage import (collect_usage, fmt_cost, helper_rows, totals, totals_line,
+                                transcripts_dir_for)
     from memgraph.watch import ttl_minutes
 
     days = args.get("days", 7)
@@ -201,8 +202,14 @@ def _usage_text(args: dict, mem: Path, project: Path) -> str:
     since = datetime.now(timezone.utc) - timedelta(days=days)
     recent = [r for r in result.replies if r.ts >= since]
     sav = measure_savings(tdir, mem, ttl_minutes(), result)
-    return (f"Token usage, last {days} days (exact, from transcripts):\n"
+    text = (f"Token usage, last {days} days (exact, from transcripts):\n"
             + totals_line(totals(recent), result.duplicates) + "\n" + savings_totals_line(sav))
+    helpers = helper_rows([r for r in recent if r.helper], tdir, limit=5)
+    if helpers:
+        text += "\nTop helpers by cost:\n" + "\n".join(
+            f"- {h['description'][:70]}: {h['input'] + h['cache_write'] + h['cache_read'] + h['output']:,} tokens, "
+            f"{fmt_cost(h['cost'], h['cost_partial'])}" for h in helpers)
+    return text
 
 
 def _handle(msg, mem: Path | None, project: Path, mem_error: str = ""):

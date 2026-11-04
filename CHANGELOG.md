@@ -15,6 +15,9 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - **Code outlines.** A local symbol index (`codeindex.json`, incremental by modification time and size; `git ls-files` or a folder walk; Python via `ast`, JS/TS, Go, Java, C#, Rust, C/C++, Ruby, PHP, Kotlin and Swift via line patterns). MCP tools `code_outline`, `code_find` and `code_read`, and the `outline <path>` and `find-symbol <name>` commands.
 - **Big-file steering.** A whole Read of a code file over 600 lines is declined once with the file's outline (at most 3,000 characters); the same read within 2 minutes goes through. Logged as `big_read_steer` events. Off with `SESSION_MEMORY_BIG_READS=0`.
 
+- **`audit [--project PATH] [--json]`.** Measures what every new chat costs before your first message is answered (median, smallest, largest first-reply context over your main chats), itemises CLAUDE.md files, MCP servers, plugins (from `claude plugin details`) and skills as labelled estimates, lists the top 3 things to switch off, and counts this week's read-guard denials, big-file steers and related-memory additions. A missing `claude` marks rows "not checked".
+- **Helper costs.** `usage --by helper` gives one row per helper-agent transcript (description, model, replies, tokens, cost, biggest first); the map's Tokens section lists the top 10 and `memory_usage` the top 5.
+
 ### Changed
 
 - Hooks keep one memory folder per project: they use `CLAUDE_PROJECT_DIR` when Claude Code sets it, so a chat that moved into a subfolder no longer creates a second `.claude/session-memory` there.

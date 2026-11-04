@@ -147,7 +147,7 @@ See how many tokens this project used and how much the plugin saved. It reads Cl
 
 ```
 bin/run-python usage                 # last 7 days, one row per day
-bin/run-python usage --days 30 --by model    # or --by session, --by who (main chat vs helper agents)
+bin/run-python usage --days 30 --by model    # or --by session, --by who (main chat vs helper agents), --by helper (one row per helper agent)
 bin/run-python savings               # measured savings and missed savings
 ```
 
@@ -164,6 +164,21 @@ Add `--json` for machine-readable output, or `--transcripts PATH` to point at a 
 
 - **Missed (estimate)**: when a main chat was resumed after more than `SESSION_MEMORY_CACHE_TTL_MIN` idle minutes (default 60), the next reply rebuilt the cache. That rebuild is measured; what a fresh start would have cost instead is estimated as the latest brief's characters / 4 (500 tokens when no brief size is known). "Could have saved" = rebuild - that estimate.
 - **Dollars** use Anthropic's list prices as of 2026-10-06 (shown next to every dollar figure). Cache writes cost 1.25 x input (5 minutes) or 2 x input (1 hour); a write without a TTL breakdown is priced as a 5-minute write. Cache reads cost 0.1 x input unless the price list says otherwise. A fresh start's dollars are "saved (priced at old chat's cache state)": what resuming the old chat would have cost, a cache read if its last reply was within the cache time (warm) or a cache write if not (cold, using that reply's 5-minute/1-hour split), minus what the new chat's first reply actually cost. This can be negative when the old chat was small and still warm. Rebuilt tokens are priced as the reply's cache writes. The map's savings figures are all-time; its usage figures cover the last 14 days. A model missing from the price table shows "—" and the rest of the total is marked "partial". Your plan may not bill per token; the dollars show list-price value.
+
+## Fixed-cost audit
+
+Every new chat pays for things you never typed: CLAUDE.md files, plugins, MCP servers, skills and Claude Code's own prompt. `audit` shows what that costs and what to switch off. It reads local transcripts and asks the `claude` CLI read-only questions, so it costs 0 model tokens:
+
+```
+bin/run-python audit [--project PATH] [--json]
+```
+
+- **Measured:** for each main chat in the transcripts, the first real reply's context (input + cache writes + cache read). It prints the median, smallest and largest, and how many chats: "Every new chat starts at about N tokens before your first message is answered".
+- **Estimate (labelled):** CLAUDE.md files Claude Code loads (your user file in `~/.claude` or `CLAUDE_CONFIG_DIR`, `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the project and each parent folder) at characters / 4; MCP servers from `claude mcp list` (tool counts only when shown); enabled plugins' "Projected token cost" from `claude plugin details` (at most 20, 15 s per call); skill counts. If `claude` is missing or slow those rows say "not checked"; the command never fails because of it.
+- **Top 3 suggestions**, biggest first, e.g. "Turn off plugin X (about 3,200 tokens in every chat): claude plugin disable X".
+- **This week:** how often the read guard declined a repeat read, big-file steers (outline characters against file lines) and related-memory additions (characters), from `events.jsonl`.
+
+**Helper costs:** `usage --by helper` lists one row per helper-agent transcript (description from its `agent-*.meta.json`, else the agent id) with model, replies, tokens and cost, biggest cost first. The map's Tokens section shows the top 10, and the MCP tool `memory_usage` the top 5.
 
 ## Cache watcher
 

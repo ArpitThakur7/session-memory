@@ -39,7 +39,7 @@ WRITE_UNKNOWN_FACTOR = 1.25  # assumption: a write without a TTL breakdown is a 
 UNKNOWN_TTL_NOTE = "cache writes without a TTL breakdown are priced as 5-minute writes (1.25 x input)"
 
 TOKEN_FIELDS = ("input", "cache_write_5m", "cache_write_1h", "cache_write_unknown", "cache_read", "output")
-GROUPINGS = ("day", "session", "model", "who")
+GROUPINGS = ("day", "session", "model", "who", "helper")
 _DATE_SUFFIX = re.compile(r"-\d{6,}")
 
 
@@ -55,6 +55,7 @@ class Reply:
     cache_write_unknown: int
     cache_read: int
     output: int
+    agent: str = ""  # helper transcripts: the file name without .jsonl, e.g. "agent-a1b2"
 
     @property
     def cache_write(self) -> int:
@@ -76,7 +77,7 @@ def _int(value) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
 
 
-def _reply(obj: dict, helper: bool) -> Reply | None:
+def _reply(obj: dict, helper: bool, agent: str = "") -> Reply | None:
     """A Reply for a real assistant line with a usage dict, else None."""
     if obj.get("type") != "assistant":
         return None
@@ -97,7 +98,7 @@ def _reply(obj: dict, helper: bool) -> Reply | None:
                  helper=helper or obj.get("isSidechain") is True,
                  input=_int(u.get("input_tokens")), cache_write_5m=w5, cache_write_1h=w1,
                  cache_write_unknown=unknown, cache_read=_int(u.get("cache_read_input_tokens")),
-                 output=_int(u.get("output_tokens")))
+                 output=_int(u.get("output_tokens")), agent=agent if helper else "")
 
 
 def _files(root: Path) -> list[tuple[Path, bool]]:
@@ -130,7 +131,7 @@ def collect_usage(transcripts_dir: Path) -> UsageResult:
                 obj = json.loads(raw)
                 if not isinstance(obj, dict):
                     continue
-                reply = _reply(obj, helper)
+                reply = _reply(obj, helper, path.stem)
                 if reply is None:
                     continue
                 msg = obj["message"]
@@ -204,6 +205,8 @@ def _key(reply: Reply, by: str) -> str:
         return reply.session
     if by == "model":
         return reply.model or "(no model)"
+    if by == "helper":
+        return reply.agent or "(unknown helper)"
     return "helper" if reply.helper else "main"
 
 
@@ -216,10 +219,17 @@ def summarize(replies: list[Reply], by: str = "day", since: datetime | None = No
         raise ValueError(f"by must be one of {', '.join(GROUPINGS)}")
     groups: dict[str, list[Reply]] = {}
     for r in replies:
+        if by == "helper" and not r.helper:
+            continue
         if since is None or r.ts >= since:
             groups.setdefault(_key(r, by), []).append(r)
     rows = [{"key": k, **_sum(v)} for k, v in groups.items()]
-    if by == "day":
+    if by == "helper":
+        for row, members in zip(rows, groups.values()):
+            models = [m.model for m in members if m.model]
+            row["model"] = max(set(models), key=models.count) if models else ""
+        rows.sort(key=lambda r: (-(r["cost"] or 0.0), -(r["input"] + r["cache_write"] + r["cache_read"] + r["output"]), r["key"]))
+    elif by == "day":
         rows.sort(key=lambda r: r["key"])
     else:
         rows.sort(key=lambda r: (-(r["input"] + r["cache_write"] + r["cache_read"] + r["output"]), r["key"]))
@@ -232,6 +242,36 @@ def totals(replies: list[Reply]) -> dict:
     read_total = row["input"] + row["cache_write"] + row["cache_read"]
     row["cache_hit_rate"] = row["cache_read"] / read_total if read_total else 0.0
     return row
+
+
+def helper_descriptions(transcripts_dir: Path) -> dict[str, str]:
+    """agent file name (no extension) -> its description, from the sibling `agent-*.meta.json`.
+
+    Only the `description` key is read; anything unreadable is left out."""
+    out: dict[str, str] = {}
+    try:
+        paths = sorted(Path(transcripts_dir).glob("*/subagents/agent-*.meta.json"))
+    except OSError:
+        return out
+    for p in paths:
+        try:
+            meta = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        desc = meta.get("description") if isinstance(meta, dict) else None
+        if isinstance(desc, str) and desc.strip():
+            out[p.name[: -len(".meta.json")]] = " ".join(desc.split())
+    return out
+
+
+def helper_rows(replies: list[Reply], transcripts_dir: Path, since: datetime | None = None,
+                limit: int | None = None) -> list[dict]:
+    """`summarize(by="helper")` rows with a `description` (agent id when there is no meta file)."""
+    desc = helper_descriptions(transcripts_dir)
+    rows = summarize(replies, "helper", since)
+    for r in rows:
+        r["description"] = desc.get(r["key"]) or r["key"]
+    return rows[:limit] if limit is not None else rows
 
 
 def project_slug(project: Path) -> str:
@@ -264,6 +304,16 @@ def usage_table(rows: list[dict], by: str) -> str:
     for r in rows:
         lines.append(f"| {r['key']} | {r['replies']:,} | {r['input']:,} | {r['cache_write']:,} | "
                      f"{r['cache_read']:,} | {r['output']:,} | {fmt_cost(r['cost'], r['cost_partial'])} |")
+    return "\n".join(lines)
+
+
+def helper_table(rows: list[dict]) -> str:
+    lines = ["| helper | model | replies | tokens | cost |", "|---|---|---:|---:|---:|"]
+    for r in rows:
+        tokens = r["input"] + r["cache_write"] + r["cache_read"] + r["output"]
+        name = r.get("description") or r["key"]
+        lines.append(f"| {name.replace('|', '/')[:70]} | {r.get('model') or '—'} | {r['replies']:,} | {tokens:,} | "
+                     f"{fmt_cost(r['cost'], r['cost_partial'])} |")
     return "\n".join(lines)
 
 

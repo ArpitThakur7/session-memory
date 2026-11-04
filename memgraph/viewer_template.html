@@ -2268,6 +2268,7 @@ const DATA = /*__MEMORY_DATA__*/null;
     }
     split('By model', T.models, (r) => String(r.key || '(no model)'));
     split('Who', T.who, (r) => (r.key === 'helper' ? 'Helper agents' : 'Main chat'));
+    split('Helpers', Array.isArray(T.helpers) ? T.helpers.slice(0, 10) : [], (r) => String(r.description || r.key).slice(0, 60));
     const s = (T.savings && T.savings.totals) || {};
     const box = el('div');
     box.append(el('div', 'k', 'Savings, all time'));
@@ -2324,6 +2325,8 @@ const DATA = /*__MEMORY_DATA__*/null;
       (Array.isArray(T.models) ? T.models : []).map((r) => [String(r.key), fmtInt(r.replies), fmtTokens(sumOf(r)), usd(r.cost, r.cost_partial)])));
     wrap.append(table('Who', ['who', 'replies', 'tokens', 'cost'],
       (Array.isArray(T.who) ? T.who : []).map((r) => [r.key === 'helper' ? 'helpers' : 'main', fmtInt(r.replies), fmtTokens(sumOf(r)), usd(r.cost, r.cost_partial)])));
+    wrap.append(table('Helpers (top 10 by cost)', ['helper', 'model', 'replies', 'tokens', 'cost'],
+      (Array.isArray(T.helpers) ? T.helpers.slice(0, 10) : []).map((r) => [String(r.description || r.key).slice(0, 80), String(r.model || ''), fmtInt(r.replies), fmtTokens(sumOf(r)), usd(r.cost, r.cost_partial)])));
     pane.append(wrap);
   }
 

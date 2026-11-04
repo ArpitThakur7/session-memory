@@ -293,7 +293,7 @@ def _pack(args: list[str], stdout: TextIO) -> int:
     return 0
 
 
-_USAGE_HELP = "Usage: usage [--days N] [--by day|session|model|who] [--json] [--transcripts PATH]\n"
+_USAGE_HELP = "Usage: usage [--days N] [--by day|session|model|who|helper] [--json] [--transcripts PATH]\n"
 _SAVINGS_HELP = "Usage: savings [--json] [--transcripts PATH]\n"
 NO_TRANSCRIPTS = "No Claude Code transcripts found at {path}. Pass --transcripts PATH.\n"
 
@@ -315,7 +315,8 @@ def _transcripts(args: list[str]) -> tuple[Path, Path]:
 
 
 def _usage(args: list[str], stdout: TextIO, now: datetime) -> int:
-    from memgraph.usage import GROUPINGS, PRICES_AS_OF, collect_usage, summarize, totals, totals_line, usage_table
+    from memgraph.usage import (GROUPINGS, PRICES_AS_OF, collect_usage, helper_rows, helper_table, summarize, totals,
+                                totals_line, usage_table)
 
     days_text, by = _opt(args, "--days"), _opt(args, "--by") or "day"
     try:
@@ -332,13 +333,18 @@ def _usage(args: list[str], stdout: TextIO, now: datetime) -> int:
     result = collect_usage(tdir)
     since = now - timedelta(days=days)
     recent = [r for r in result.replies if r.ts >= since]
-    rows, total = summarize(recent, by), totals(recent)
+    if by == "helper":
+        recent = [r for r in recent if r.helper]
+        rows = helper_rows(recent, tdir)
+    else:
+        rows = summarize(recent, by)
+    total = totals(recent)
     if "--json" in args:
         stdout.write(json.dumps({"by": by, "days": days, "since": since.isoformat(), "rows": rows, "totals": total,
                                  "duplicates": result.duplicates, "prices_as_of": PRICES_AS_OF}, indent=1) + "\n")
         return 0
     stdout.write(f"Token usage, last {days} days, by {by} (exact, from transcripts):\n")
-    stdout.write(usage_table(rows, by) + "\n\n" + totals_line(total, result.duplicates) + "\n")
+    stdout.write((helper_table(rows) if by == "helper" else usage_table(rows, by)) + "\n\n" + totals_line(total, result.duplicates) + "\n")
     return 0
 
 
@@ -447,6 +453,10 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _usage(args, stdout, now)
     if cmd == "savings":
         return _savings(args, stdout)
+    if cmd == "audit":
+        from memgraph.audit import audit_main
+
+        return audit_main(args, stdout, now)
     if cmd == "doctor":
         from memgraph.doctor import doctor_main
 
@@ -459,7 +469,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.statusline import setup_statusline_main
 
         return setup_statusline_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who|helper] [--json] | savings [--json] | audit [--project <dir>] [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 
