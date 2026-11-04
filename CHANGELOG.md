@@ -21,7 +21,7 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 ### Changed
 
 - Hooks keep one memory folder per project: they use `CLAUDE_PROJECT_DIR` when Claude Code sets it, so a chat that moved into a subfolder no longer creates a second `.claude/session-memory` there.
-- Faster hooks: the CLI imports only what each command needs, and `bin/run-python.cmd` starts Python once (`py -3` directly; the version check moved into the CLI).
+- Faster hooks: the CLI imports only what each command needs, and `bin/run-python.cmd` starts Python once (`py -3` directly; the version check moved into the CLI). `bin/run-python` (bash) also starts Python once and skips the Windows Store `python3` stub without running it.
 
 ## 0.2.0
 

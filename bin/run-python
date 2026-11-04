@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Launch memgraph.cli with the first usable Python >= 3.10 (skips the Windows Store python3 stub).
+# Launch memgraph.cli with one Python start: run the first python3/python/py on PATH directly
+# (memgraph.cli exits quietly on Python older than 3.10). The Windows Store python3 stub is skipped
+# without starting it; if exec of a candidate fails, the next one is tried.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$ROOT"
+shopt -s execfail
 for c in python3 python py; do
-  if "$c" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
-    PYTHONPATH="$ROOT" exec "$c" -m memgraph.cli "$@"
-  fi
+  p="$(command -v "$c" 2>/dev/null)" || continue
+  case "$p" in *WindowsApps*) continue ;; esac
+  exec "$p" -m memgraph.cli "$@"
 done
 exit 0
