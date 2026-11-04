@@ -284,12 +284,12 @@ def project_slug(project: Path) -> str:
 
 
 def transcripts_dir_for(project: Path, mem_dir: Path | None) -> Path:
-    """Where this project's transcripts live: recorded by the hooks (when that folder still exists),
-    else derived from the path under CLAUDE_CONFIG_DIR (or ~/.claude)."""
+    """Where this project's transcripts live: recorded by the hooks (when that folder still holds
+    transcripts), else derived from the path under CLAUDE_CONFIG_DIR (or ~/.claude)."""
     if mem_dir is not None:
         for name in ("state.json", "guard.json"):
             recorded = load_state(Path(mem_dir) / name).get("transcripts_dir")
-            if isinstance(recorded, str) and recorded and Path(recorded).is_dir():
+            if isinstance(recorded, str) and recorded and next(Path(recorded).glob("*.jsonl"), None):
                 return Path(recorded)
     given = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
     base = Path(given).expanduser() if given else Path.home() / ".claude"

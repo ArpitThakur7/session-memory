@@ -142,8 +142,21 @@ def test_transcripts_dir_ignores_stale_recorded_dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
     assert usage.transcripts_dir_for(project, mem) == tmp_path / "cfg" / "projects" / slug
     (tmp_path / "live").mkdir()
+    (tmp_path / "live" / "s1.jsonl").write_text("", encoding="utf-8")
     (mem / "guard.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "live")}), encoding="utf-8")
     assert usage.transcripts_dir_for(project, mem) == tmp_path / "live"  # state.json is stale, guard.json is not
+
+
+def test_transcripts_dir_ignores_recorded_dir_without_transcripts(tmp_path, monkeypatch):
+    # A folder that exists but holds no .jsonl (e.g. a probe's temp dir) must not win over the slug.
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    monkeypatch.setattr(usage.Path, "home", lambda: tmp_path / "home")
+    project = tmp_path / "proj"
+    (tmp_path / "empty").mkdir()
+    (mem / "state.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "empty")}), encoding="utf-8")
+    slug = usage.project_slug(project)
+    assert usage.transcripts_dir_for(project, mem) == tmp_path / "home" / ".claude" / "projects" / slug
 
 
 @pytest.mark.skipif(os.name != "nt", reason="a drive-letter path is only absolute on Windows")
