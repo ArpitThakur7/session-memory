@@ -126,6 +126,7 @@ def test_transcripts_dir_from_state_or_slug(tmp_path, monkeypatch):
     slug = "".join(c if c.isalnum() else "-" for c in str(project.resolve()))
     assert got == tmp_path / "home" / ".claude" / "projects" / slug
     (tmp_path / "t").mkdir()
+    (tmp_path / "t" / "s1.jsonl").write_text("", encoding="utf-8")
     (mem / "state.json").write_text(json.dumps({"transcripts_dir": str(tmp_path / "t")}), encoding="utf-8")
     assert usage.transcripts_dir_for(project, mem) == tmp_path / "t"
 
