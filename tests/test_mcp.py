@@ -47,10 +47,12 @@ def test_initialize_echoes_version(tmp_path):
     }
 
 
-def test_tools_list_has_five_tools_with_schemas(tmp_path):
+def test_tools_list_has_eight_tools_with_schemas(tmp_path):
     (r,) = drive(seed(tmp_path), req(1, "tools/list"))
     tools = {t["name"]: t for t in r["result"]["tools"]}
-    assert set(tools) == {"memory_brief", "memory_recall", "memory_remember", "memory_pack", "memory_usage"}
+    assert set(tools) == {"memory_brief", "memory_recall", "memory_remember", "memory_pack", "memory_usage",
+                          "code_outline", "code_find", "code_read"}
+    assert tools["code_read"]["inputSchema"]["required"] == ["path", "symbol"]
     assert tools["memory_usage"]["inputSchema"]["properties"]["days"]["type"] == "integer"
     for t in tools.values():
         assert t["description"] and t["inputSchema"]["type"] == "object"
@@ -150,7 +152,7 @@ def test_serve_subprocess_smoke(tmp_path):
                        input=stdin, capture_output=True, timeout=30, cwd=root)
     replies = [json.loads(l) for l in p.stdout.decode("utf-8").splitlines()]
     assert [r["id"] for r in replies] == [1, 2]
-    assert len(replies[1]["result"]["tools"]) == 5
+    assert len(replies[1]["result"]["tools"]) == 8
     assert p.returncode == 0
 
 

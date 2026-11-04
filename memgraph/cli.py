@@ -70,10 +70,17 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
             readguard.bump_compaction(payload, mem)
         else:
             reason = readguard.check(payload, mem, now)
+            event = {"type": "read_denied", "session": payload.get("session_id")}
+            if not reason and _may_steer(payload):
+                from memgraph import codeindex
+
+                steer = codeindex.big_read_steer(payload, project_root(payload["cwd"]), mem, now)
+                if steer:
+                    reason, event = steer
             if reason:
                 _emit(stdout, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                       "permissionDecisionReason": reason}})
-                _log_event(mem, {"type": "read_denied", "session": payload.get("session_id")})
+                _log_event(mem, event)
         return
     root = project_root(payload["cwd"])
     if name == "hook-stop":
@@ -119,6 +126,21 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
             _log_event(mem, {"type": "guard_block", "session": payload.get("session_id"), "context": context})
         else:
             _related_memory(payload, mem, root, stdout)
+
+
+_CODE_EXTS = frozenset(".py .pyi .js .jsx .mjs .cjs .ts .tsx .mts .cts .go .java .cs .rs .c .h .cc .cpp .cxx "
+                       ".hpp .hh .hxx .rb .php .kt .kts .swift".split())
+
+
+def _may_steer(payload: dict) -> bool:
+    """Cheap test before importing the code index: a whole-file Read of a code file, steering on."""
+    if os.environ.get("SESSION_MEMORY_BIG_READS", "1").strip() == "0":
+        return False
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict) or tool_input.get("offset") is not None or tool_input.get("limit") is not None:
+        return False
+    path = tool_input.get("file_path")
+    return isinstance(path, str) and os.path.splitext(path)[1].lower() in _CODE_EXTS
 
 
 def _related_memory(payload: dict, mem: Path, root: Path, stdout: TextIO) -> None:
@@ -350,6 +372,29 @@ def _watch(args: list[str]) -> int:
     return 0
 
 
+def _code(cmd: str, args: list[str], stdout: TextIO) -> int:
+    from memgraph import codeindex
+
+    root = project_root(Path.cwd())
+    limit = _opt(args, "--limit")
+    words = [a for i, a in enumerate(args) if a != "--limit" and (i == 0 or args[i - 1] != "--limit")]
+    if not words:
+        usage = "outline <path>" if cmd == "outline" else "find-symbol <name> [--limit N]"
+        stdout.write(f"Usage: {usage}\n")
+        return 2
+    try:
+        if cmd == "outline":
+            text = codeindex.outline(root, memory_dir(root), " ".join(words))
+        else:
+            n = int(limit) if limit and limit.isdigit() else 20
+            text = codeindex.find(root, memory_dir(root), " ".join(words), limit=n)
+    except ValueError as e:
+        stdout.write(f"{e}\n")
+        return 2
+    stdout.write(text + "\n")
+    return 0
+
+
 def _mcp(args: list[str]) -> int:
     from memgraph.mcp_server import serve
 
@@ -394,6 +439,8 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _map(args, stdout)
     if cmd == "mcp":
         return _mcp(args)
+    if cmd in ("outline", "find-symbol"):
+        return _code(cmd, args, stdout)
     if cmd == "pack":
         return _pack(args, stdout)
     if cmd == "usage":
@@ -412,7 +459,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.statusline import setup_statusline_main
 
         return setup_statusline_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who] [--json] | savings [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 

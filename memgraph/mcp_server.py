@@ -63,7 +63,44 @@ TOOLS = [
             "properties": {"days": {"type": "integer", "minimum": 1, "default": 7}},
         },
     },
+    {
+        "name": "code_outline",
+        "description": "Outline of one code file in this project: classes, functions and methods with their line "
+                       "ranges and definition lines. Read only the lines you need afterwards.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "File path, project-relative or absolute"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "code_find",
+        "description": "Find classes, functions and methods by name across this project's code "
+                       "(exact matches first, then prefix, then substring), with file and line range.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Symbol name or part of it"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "code_read",
+        "description": "The source lines (with line numbers) of one class, function or method in a file, "
+                       "instead of reading the whole file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path, project-relative or absolute"},
+                "symbol": {"type": "string", "description": "Symbol name, e.g. Class.method or function"},
+            },
+            "required": ["path", "symbol"],
+        },
+    },
 ]
+CODE_TOOLS = frozenset({"code_outline", "code_find", "code_read"})
 
 
 class _ParamError(Exception):
@@ -93,6 +130,8 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         raise _ParamError(f"Unknown tool: {name}")
     if mem is None:
         raise RuntimeError(mem_error or "Memory folder unavailable")
+    if name in CODE_TOOLS:
+        return [_text(_code_text(name, args, mem, project))]
     graph_path = mem / "graph.json"
     graph = Graph.load(graph_path)  # re-read every call: the Stop hook keeps updating it
     if name == "memory_brief":
@@ -133,6 +172,16 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         else:
             content.append(_text("Visual pack unavailable: install Pillow"))
     return content
+
+
+def _code_text(name: str, args: dict, mem: Path, project: Path) -> str:
+    from memgraph import codeindex
+
+    if name == "code_outline":
+        return codeindex.outline(project, mem, args.get("path"))
+    if name == "code_find":
+        return codeindex.find(project, mem, args.get("name"), args.get("limit", 20))
+    return codeindex.read_symbol(project, mem, args.get("path"), args.get("symbol"))
 
 
 def _usage_text(args: dict, mem: Path, project: Path) -> str:

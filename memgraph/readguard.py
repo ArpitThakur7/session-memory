@@ -81,9 +81,9 @@ def _span(tool_input: dict) -> tuple[int, int] | None:
     return start, start + limit
 
 
-def _target(payload: dict):
+def _target(payload: dict, guard: bool = True):
     """(scope, path as given, normalized path, stat, span) for a guardable Read, else None."""
-    if not enabled():
+    if guard and not enabled():
         return None
     tool_input = payload.get("tool_input")
     scope = scope_key(payload)
@@ -175,6 +175,37 @@ def _current(rec, st, epoch: int) -> bool:
             and rec.get("compact_epoch") == epoch)
 
 
+def _retry(rec: dict, start: int, end: int, t: float) -> bool:
+    """True when the same lines were denied less than 2 minutes ago."""
+    denied = rec.get("denied")
+    return (isinstance(denied, list) and len(denied) == 3 and denied[:2] == [start, end]
+            and isinstance(denied[2], (int, float)) and not isinstance(denied[2], bool)
+            and 0 <= t - denied[2] <= RETRY_SECONDS)
+
+
+def deny_once(payload: dict, mem: Path, now: datetime) -> bool:
+    """For other Read denials (big-file steering): True to deny now, False for the retry within 2 minutes.
+
+    Uses the read guard's denial marker, so it works even when the read guard itself is off."""
+    target = _target(payload, guard=False)
+    if target is None:
+        return False
+    scope, _file_path, key, _st, (start, end) = target
+    t = now.timestamp()
+    state = load_state(mem / READS_FILE)
+    entry, files = _scope_files(state, scope)
+    rec = files.get(key)
+    if not isinstance(rec, dict):
+        rec = files[key] = {}
+    if _retry(rec, start, end, t):
+        return False
+    rec["denied"] = [start, end, t]
+    entry["seen"] = t
+    _prune(state)
+    _save(mem, state)
+    return True
+
+
 def check(payload: dict, mem: Path, now: datetime) -> str | None:
     """PreToolUse: the deny reason for this Read, or None to allow it. Records no read."""
     target = _target(payload)
@@ -190,9 +221,7 @@ def check(payload: dict, mem: Path, now: datetime) -> str | None:
     at = _covered_at(start, end, _ranges(rec.get("ranges")), t - FRESH_SECONDS)
     if at is None:
         return None
-    denied = rec.get("denied")
-    if (isinstance(denied, list) and len(denied) == 3 and denied[:2] == [start, end]
-            and isinstance(denied[2], (int, float)) and 0 <= t - denied[2] <= RETRY_SECONDS):
+    if _retry(rec, start, end, t):
         return None  # asked again right after a denial: let it through (PostToolUse records it)
     rec["denied"] = [start, end, t]
     entry["seen"] = t
