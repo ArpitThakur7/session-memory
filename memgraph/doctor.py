@@ -122,7 +122,7 @@ def _transcripts_dir(ctx) -> Path:
     mem = ctx["mem"]
     for name in ("state.json", "guard.json"):
         recorded = load_state(mem / name).get("transcripts_dir") if mem.is_dir() else None
-        if isinstance(recorded, str) and recorded:
+        if isinstance(recorded, str) and recorded and next(Path(recorded).glob("*.jsonl"), None):
             return Path(recorded)
     return ctx["home"] / ".claude" / "projects" / project_slug(ctx["project"])
 

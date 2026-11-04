@@ -131,6 +131,12 @@ def test_transcripts_and_memory(env):
     _, by, _ = checks(project)
     assert by["transcripts"]["status"] == "ok" and "1" in by["transcripts"]["detail"]
     assert by["memory"]["status"] == "ok" and "2 items" in by["memory"]["detail"]
+    # A recorded folder with no transcripts (e.g. a probe's temp dir) must not hide the real one.
+    empty = env["home"] / "empty"
+    empty.mkdir()
+    (mem / "state.json").write_text(json.dumps({"transcripts_dir": str(empty)}), encoding="utf-8")
+    _, by, _ = checks(project)
+    assert str(tdir) in by["transcripts"]["detail"]
 
 
 def test_watcher_state(env):
