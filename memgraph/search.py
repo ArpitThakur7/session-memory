@@ -21,8 +21,9 @@ MIN_SCORE = 1.5
 _LABEL_CHARS = 140
 K1, B = 1.2, 0.75
 KINDS = ("task", "decision", "file", "error")
+WEIGHTS = {"decision": 1.4, "file": 1.3, "error": 1.1, "task": 1.0}
 
-_WORD = re.compile(r"[a-z0-9_]{3,}")
+_WORD = re.compile(r"[a-z0-9_]{3,}")  # applied after lowercasing
 _ABS_PATH = re.compile(r"[A-Za-z]:[\/][^\s\"'`)>\]]+|(?<![\w.:/-])/(?:[\w.~@+-]+/)+[\w.~@+-]*")
 _STOP = frozenset("""the and for are but not you all any can had her was one our out has have his how its may new now
 old see two way who did get let put say she too use with this that from they will would there their what about which when
@@ -30,13 +31,26 @@ make like just into than then them these those could should where while your bee
 please want need fix add change update want look check show tell help try using used""".split())
 
 
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_SUFFIXES = (("ication", "y"), ("ations", ""), ("ation", ""), ("ings", ""), ("ing", ""), ("ers", ""), ("er", ""),
+             ("ions", ""), ("ion", ""), ("ies", "y"), ("es", ""), ("ed", ""), ("s", ""))
+
+
+def stem(word: str) -> str:
+    """Strip one common suffix when at least 4 characters remain (watcher -> watch, notification -> notify)."""
+    for suffix, repl in _SUFFIXES:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[:-len(suffix)] + repl
+    return word
+
+
 def tokenize(text) -> list[str]:
-    """Lowercase words of 3+ characters (path segments included), minus stopwords; a_b also yields a and b."""
+    """Stemmed lowercase words of 3+ characters (path segments, snake_case and camelCase split), minus stopwords."""
     out = []
-    for w in _WORD.findall(str(text).lower()):
-        parts = [w] + ([p for p in w.split("_") if len(p) >= 3] if "_" in w else [])
-        out.extend(p for p in parts if p not in _STOP)
-    return out
+    for w in _WORD.findall(_CAMEL.sub(" ", str(text)).lower()):
+        parts = [p for p in w.split("_") if len(p) >= 3]
+        out.extend(stem(p) for p in parts if p not in _STOP)
+    return [t for t in out if t not in _STOP]
 
 
 def enabled() -> bool:
@@ -108,6 +122,7 @@ def search(graph, prompt: str, root: Path | None = None, limit: int = MAX_HITS) 
                 continue
             idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
             score += idf * f * (K1 + 1) / (f + K1 * (1 - B + B * dl / avg))
+        score *= WEIGHTS.get(node.get("kind"), 1.0)
         if score >= MIN_SCORE:
             scored.append((node, shown, score))
     scored.sort(key=lambda h: (-round(h[2], 9), _neg(h[0].get("last")), h[1]))

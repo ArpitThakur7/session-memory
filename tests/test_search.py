@@ -140,3 +140,23 @@ def test_speed_on_5000_nodes():
     t = time.perf_counter()
     text, hits = search.related_memory(g, "fix the cache watcher notification")
     assert hits >= 1 and time.perf_counter() - t < 0.5
+
+
+def test_stemming():
+    t = search.tokenize
+    assert t("watcher") == t("watch.py")[:1] == ["watch"]
+    assert t("notification") == t("notify") == ["notify"]
+    assert t("brushing") == t("brush") == ["brush"]
+    assert t("cacheWatcher_cfg") == ["cache", "watch", "cfg"]
+
+
+def test_file_outranks_long_old_tasks():
+    g = Graph()
+    for i in range(6):
+        g.add_node("task", f"t{i}", "please look at how the cache is refreshed and whether the cache layer needs a notification "
+                   "when entries expire, and also review the logging setup and the retry policy number %d" % i, f"2026-10-{i + 10}T00:00:00Z")
+    g.add_node("file", "f", "memgraph/watch.py", "2026-09-01T00:00:00Z")
+    for i in range(40):
+        g.add_node("task", f"o{i}", f"unrelated billing chore {i}", "2026-09-01T00:00:00Z")
+    top = [shown for _, shown, _ in search.search(g, "fix the cache watcher notification")[:3]]
+    assert "memgraph/watch.py" in top
