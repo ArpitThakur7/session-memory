@@ -248,8 +248,8 @@ def test_other_languages_reasonable():
 def test_outline_lines_format():
     entry = {"lines": 27, "symbols": codeindex.parse_source(PY, "python")}
     lines = codeindex.outline_lines(entry)
-    assert lines[0] == "top (function) L5\u2013L9  def top(a, b=1):  # Add things."
-    assert lines[2] == "Shape.area (method) L15\u2013L16  def area(self):"
+    assert lines[0] == "top (function) L5-L9  def top(a, b=1):  # Add things."
+    assert lines[2] == "Shape.area (method) L15-L16  def area(self):"
 
 
 # ---- index, cache ----
@@ -319,7 +319,7 @@ def test_outline_refuses_paths_outside_project(proj, tmp_path):
     with pytest.raises(ValueError, match="not a supported code file"):
         codeindex.outline(proj, mem, "notes.md")
     text = codeindex.outline(proj, mem, str(proj / "src" / "shapes.py"))
-    assert text.splitlines()[0] == "src/shapes.py \u2014 27 lines, 6 symbols"
+    assert text.splitlines()[0] == "src/shapes.py - 27 lines, 6 symbols"
 
 
 def test_outline_capped(proj):
@@ -335,7 +335,7 @@ def test_find_orders_exact_prefix_substring(proj):
     text = codeindex.find(proj, memory_dir(proj), "area")
     names = [line.split("  ")[1].split(" (")[0] for line in text.splitlines()[1:]]
     assert names == ["Shape.area", "area_total", "garea"]
-    assert text.splitlines()[1].startswith("src/shapes.py:L15\u2013L16  Shape.area (method)")
+    assert text.splitlines()[1].startswith("src/shapes.py:L15-L16  Shape.area (method)")
     assert "Nothing found" in codeindex.find(proj, memory_dir(proj), "zzzz")
     assert len(codeindex.find(proj, memory_dir(proj), "a", limit=2).splitlines()) == 3
 
@@ -344,7 +344,7 @@ def test_read_symbol_lines_and_truncation(proj):
     mem = memory_dir(proj)
     text = codeindex.read_symbol(proj, mem, "src/shapes.py", "Shape.name")
     lines = text.splitlines()
-    assert lines[0] == "src/shapes.py  Shape.name (method) L18\u2013L20"
+    assert lines[0] == "src/shapes.py  Shape.name (method) L18-L20"
     assert lines[1:] == ["18\t    @property", "19\t    def name(self):", '20\t        return "s"']
     assert codeindex.read_symbol(proj, mem, "src/shapes.py", "area").splitlines()[1] == "15\t    def area(self):"
     with pytest.raises(ValueError, match="No symbol"):
@@ -375,8 +375,8 @@ def test_mcp_code_tools(proj, tmp_path):
         call(3, "code_read", path="src/box.ts", symbol="Box.grow"),
         call(4, "code_outline", path=str(tmp_path)), call(5, "code_find", name="x", limit=0))
     assert outline["result"]["isError"] is False
-    assert "Box.grow (method) L27\u2013L31" in outline["result"]["content"][0]["text"]
-    assert "src/box.ts:L27\u2013L31  Box.grow (method)" in find["result"]["content"][0]["text"]
+    assert "Box.grow (method) L27-L31" in outline["result"]["content"][0]["text"]
+    assert "src/box.ts:L27-L31  Box.grow (method)" in find["result"]["content"][0]["text"]
     assert read["result"]["content"][0]["text"].splitlines()[1] == "27\t  async grow(by: number): Promise<void> {"
     assert outside["result"]["isError"] is True and "outside the project" in outside["result"]["content"][0]["text"]
     assert bad["result"]["isError"] is True
@@ -416,9 +416,11 @@ def reason_of(text):
 def test_big_code_read_steered_once_then_allowed(proj):
     path = big_file(proj)
     reason = reason_of(read(payload(proj, path)))
-    assert reason.startswith("This file has 800 lines. Its outline:\nf0 (function) L1\u2013L2  def f0():\n")
-    assert reason.endswith("\nRead the lines you need with offset and limit, or use the code_read tool. "
-                           "To read the whole file anyway, read it again within 2 minutes.")
+    assert reason.startswith("This file has 800 lines. Its outline:\nf0 (function) L1-L2  def f0():\n")
+    assert reason.endswith("\nRead the lines you need with offset and limit (or the code_read tool if it is "
+                           "available). To read the whole file anyway, read it again within 2 minutes.")
+    assert len(reason) <= 3000
+    assert reason.rsplit("\nRead the lines", 1)[0].endswith(" more symbols \u2014 use code_outline")
     outline = reason.split("Its outline:\n", 1)[1].rsplit("\nRead the lines", 1)[0]
     assert len(outline) <= 3000 and "more symbols" in outline
     assert read(payload(proj, path), T0 + timedelta(seconds=60)) == ""  # the escape hatch
@@ -458,10 +460,10 @@ def test_cli_outline_and_find_symbol(proj, monkeypatch):
     monkeypatch.chdir(proj)
     out = io.StringIO()
     assert main(["outline", "src/shapes.py"], io.StringIO(""), out) == 0
-    assert out.getvalue().startswith("src/shapes.py \u2014 27 lines, 6 symbols\n")
+    assert out.getvalue().startswith("src/shapes.py - 27 lines, 6 symbols\n")
     out = io.StringIO()
     assert main(["find-symbol", "fetch"], io.StringIO(""), out) == 0
-    assert "src/shapes.py:L26\u2013L27  fetch (async function)" in out.getvalue()
+    assert "src/shapes.py:L26-L27  fetch (async function)" in out.getvalue()
     out = io.StringIO()
     assert main(["outline", "../elsewhere.py"], io.StringIO(""), out) == 2
     assert "outside the project" in out.getvalue()
@@ -472,3 +474,21 @@ def test_cli_extension_list_matches_index():
     from memgraph import cli
 
     assert cli._CODE_EXTS == frozenset(codeindex.LANGS)
+
+
+def test_whole_reason_capped_for_long_names(proj):
+    long = "".join(f"def a_rather_long_function_name_number_{i:04d}(first_argument, second_argument, third):\n"
+                   f"    return {i}\n" for i in range(400))
+    (proj / "long.py").write_text(long, encoding="utf-8")
+    reason = reason_of(read(payload(proj, proj / "long.py")))
+    assert len(reason) <= 3000 and "more symbols \u2014 use code_outline" in reason
+
+
+def test_rendered_ranges_are_ascii(proj, monkeypatch):
+    monkeypatch.chdir(proj)
+    for argv in (["outline", "src/shapes.py"], ["find-symbol", "area"]):
+        out = io.StringIO()
+        assert main(argv, io.StringIO(""), out) == 0
+        assert out.getvalue().isascii() and "L15-L16" in out.getvalue()
+    text = codeindex.read_symbol(proj, memory_dir(proj), "src/shapes.py", "area")
+    assert text.splitlines()[0] == "src/shapes.py  Shape.area (method) L15-L16"

@@ -49,9 +49,10 @@ SKIP_DIRS = frozenset({
 })
 CONTAINERS = frozenset({"class", "interface", "struct", "enum", "trait", "impl", "namespace", "module",
                         "extension", "object", "union"})
-STEER_REASON = ("This file has {n} lines. Its outline:\n{outline}\nRead the lines you need with offset and limit, "
-                "or use the code_read tool. To read the whole file anyway, read it again within 2 minutes.")
-DASH = "–"
+STEER_REASON = ("This file has {n} lines. Its outline:\n{outline}\nRead the lines you need with offset and limit "
+                "(or the code_read tool if it is available). To read the whole file anyway, read it again within "
+                "2 minutes.")
+DASH = "-"  # ASCII: an en dash shows as a replacement character in some Windows consoles
 
 
 def lang_of(path) -> str | None:
@@ -550,11 +551,12 @@ def _fit(lines: list[str], cap: int, more: str) -> str:
     return "\n".join(out)
 
 
-def outline_body(entry: dict, cap: int) -> str:
+def outline_body(entry: dict, cap: int,
+                 more: str = "... {n} more symbols - use code_find, or Read with offset and limit") -> str:
     lines = outline_lines(entry)
     if not lines:
         return "(no definitions found)"
-    return _fit(lines, cap, "... and {n} more symbols (use code_find, or Read with offset and limit)")
+    return _fit(lines, cap, more)
 
 
 def _skip_note(rel: str, entry: dict) -> str:
@@ -566,7 +568,7 @@ def outline(root: Path, mem: Path, path: str, cap: int = OUTLINE_CHARS) -> str:
     entry = file_entry(root, mem, full, rel)
     if entry.get("skip"):
         return _skip_note(rel, entry)
-    header = f"{rel} — {entry['lines']} lines, {len(entry['symbols'])} symbols"
+    header = f"{rel} - {entry['lines']} lines, {len(entry['symbols'])} symbols"
     return header + "\n" + outline_body(entry, cap - len(header) - 1)
 
 
@@ -663,7 +665,8 @@ def big_read_steer(payload: dict, root: Path, mem: Path, now) -> tuple[str, dict
 
     if not readguard.deny_once(payload, mem, now):
         return None
-    body = outline_body(entry, STEER_CHARS)
+    room = STEER_CHARS - len(STEER_REASON.format(n=entry["lines"], outline=""))  # the whole reason fits the cap
+    body = outline_body(entry, room, "… {n} more symbols — use code_outline")
     event = {"type": "big_read_steer", "lines": entry["lines"], "outline_chars": len(body),
              "session": payload.get("session_id")}
     return STEER_REASON.format(n=entry["lines"], outline=body), event
