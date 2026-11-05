@@ -37,6 +37,29 @@ TOOLS = [
         },
     },
     {
+        "name": "memory_explain",
+        "description": "One memory note (task, file, command, error or decision) with its links, each tagged extracted (seen in a chat) or inferred (guessed).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"thing": {"type": "string", "description": "Word, file path or text naming the note"},
+                           "budget": {"type": "integer", "minimum": 1, "maximum": 100000,
+                                      "description": "Most tokens to return (about 4 characters each); default 600"}},
+            "required": ["thing"],
+        },
+    },
+    {
+        "name": "memory_path",
+        "description": "Shortest chain of links between two memory notes, each hop with its relation and tag.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"a": {"type": "string", "description": "First note"},
+                           "b": {"type": "string", "description": "Second note"},
+                           "budget": {"type": "integer", "minimum": 1, "maximum": 100000,
+                                      "description": "Most tokens to return (about 4 characters each); default 600"}},
+            "required": ["a", "b"],
+        },
+    },
+    {
         "name": "memory_remember",
         "description": "Save a decision or note to project memory.",
         "inputSchema": {
@@ -153,6 +176,21 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         budget = _budget_arg(args)
         lines = recall_lines(graph, query, project, budget)
         return [_text("\n".join(lines) if lines else f'Nothing found for "{query}".')]
+    if name in ("memory_explain", "memory_path"):
+        from memgraph.explore import explain_lines, path_lines
+
+        keys = ("thing",) if name == "memory_explain" else ("a", "b")
+        words = []
+        for key in keys:
+            value = args.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{key} must be a non-empty string")
+            words.append(value.strip())
+        budget = _budget_arg(args)
+        if name == "memory_path":
+            return [_text("\n".join(path_lines(graph, words[0], words[1], project, budget)))]
+        lines = explain_lines(graph, words[0], project, budget)
+        return [_text("\n".join(lines) if lines else f'Nothing found for "{words[0]}".')]
     if name == "memory_usage":
         return [_text(_usage_text(args, mem, project))]
     if name == "memory_remember":

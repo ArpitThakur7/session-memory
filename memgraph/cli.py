@@ -223,20 +223,26 @@ _BUDGET_FLAG = re.compile(r"(?:^|\s)--budget(?:=|\s+)?(\S*)")
 RECALL_USAGE = "Usage: recall <word> [--budget N]   (N = most tokens to print, default 600)\n"
 
 
-def _recall(args: list[str], stdout: TextIO) -> int:
-    from memgraph.memory_ops import DEFAULT_RECALL_BUDGET, recall_lines
+def _split_budget(text: str) -> tuple[str, int | None]:
+    """(text without `--budget N`, N); N is DEFAULT_RECALL_BUDGET when absent and None when invalid."""
+    from memgraph.memory_ops import DEFAULT_RECALL_BUDGET
 
-    term = " ".join(args).strip()  # the /recall command passes everything as one quoted word
-    budget = DEFAULT_RECALL_BUDGET
-    m = _BUDGET_FLAG.search(term)
-    if m:
-        value = m.group(1)
-        if not value.isdigit() or not 1 <= int(value) <= 100_000:
-            stdout.write(RECALL_USAGE)
-            return 2
-        budget = int(value)
-        term = " ".join((term[:m.start()] + " " + term[m.end():]).split())
-    if not term:
+    m = _BUDGET_FLAG.search(text)
+    if not m:
+        return text.strip(), DEFAULT_RECALL_BUDGET
+    value = m.group(1)
+    rest = " ".join((text[:m.start()] + " " + text[m.end():]).split())
+    if not value.isdigit() or not 1 <= int(value) <= 100_000:
+        return rest, None
+    return rest, int(value)
+
+
+def _recall(args: list[str], stdout: TextIO) -> int:
+    from memgraph.memory_ops import recall_lines
+
+    # the /recall command passes everything as one quoted word
+    term, budget = _split_budget(" ".join(args))
+    if not term or budget is None:
         stdout.write(RECALL_USAGE)
         return 2
     _, graph = _project()
@@ -246,6 +252,35 @@ def _recall(args: list[str], stdout: TextIO) -> int:
         return 0
     stdout.write("\n".join(out) + "\n")
     return 0
+
+
+def _explain(args: list[str], stdout: TextIO) -> int:
+    from memgraph.explore import explain_lines
+
+    thing, budget = _split_budget(" ".join(args))
+    if not thing or budget is None:
+        stdout.write("Usage: explain <thing> [--budget N]\n")
+        return 2
+    _, graph = _project()
+    out = explain_lines(graph, thing, Path.cwd(), budget)
+    stdout.write(("\n".join(out) if out else f'Nothing found for "{thing}".') + "\n")
+    return 0
+
+
+def _path(args: list[str], stdout: TextIO) -> int:
+    from memgraph.explore import path_lines
+
+    rest, budget = _split_budget(" ".join(f'"{a}"' if " " in a else a for a in args))
+    words = [w.strip('"') for w in _QUOTED_WORDS.findall(rest)]
+    if len(words) != 2 or budget is None:
+        stdout.write('Usage: path <a> <b> [--budget N]   (quote a name with spaces: path "login form" NameError)\n')
+        return 2
+    _, graph = _project()
+    stdout.write("\n".join(path_lines(graph, words[0], words[1], Path.cwd(), budget)) + "\n")
+    return 0
+
+
+_QUOTED_WORDS = re.compile(r'"[^"]+"|\S+')
 
 
 def _stats(stdout: TextIO) -> int:
@@ -457,6 +492,10 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         return _remember(args, stdout, now)
     if cmd == "recall":
         return _recall(args, stdout)
+    if cmd == "explain":
+        return _explain(args, stdout)
+    if cmd == "path":
+        return _path(args, stdout)
     if cmd == "stats":
         return _stats(stdout)
     if cmd == "map":
@@ -487,7 +526,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.statusline import setup_statusline_main
 
         return setup_statusline_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <word> [--budget N] | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who|helper] [--json] | savings [--json] | audit [--project <dir>] [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <word> [--budget N] | explain <thing> [--budget N] | path <a> <b> [--budget N] | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who|helper] [--json] | savings [--json] | audit [--project <dir>] [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 
