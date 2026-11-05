@@ -1,6 +1,6 @@
 ---
 description: Search project memory
-argument-hint: [word]
+argument-hint: [word] [--budget N]
 allowed-tools: Bash(*run-python*)
 ---
 Search word: $ARGUMENTS

@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import traceback
@@ -218,12 +219,28 @@ def _remember(args: list[str], stdout: TextIO, now: datetime) -> int:
     return 0
 
 
-def _recall(args: list[str], stdout: TextIO) -> int:
-    from memgraph.memory_ops import recall_lines
+_BUDGET_FLAG = re.compile(r"(?:^|\s)--budget(?:=|\s+)?(\S*)")
+RECALL_USAGE = "Usage: recall <word> [--budget N]   (N = most tokens to print, default 600)\n"
 
-    term = " ".join(args).strip()
+
+def _recall(args: list[str], stdout: TextIO) -> int:
+    from memgraph.memory_ops import DEFAULT_RECALL_BUDGET, recall_lines
+
+    term = " ".join(args).strip()  # the /recall command passes everything as one quoted word
+    budget = DEFAULT_RECALL_BUDGET
+    m = _BUDGET_FLAG.search(term)
+    if m:
+        value = m.group(1)
+        if not value.isdigit() or not 1 <= int(value) <= 100_000:
+            stdout.write(RECALL_USAGE)
+            return 2
+        budget = int(value)
+        term = " ".join((term[:m.start()] + " " + term[m.end():]).split())
+    if not term:
+        stdout.write(RECALL_USAGE)
+        return 2
     _, graph = _project()
-    out = recall_lines(graph, term, Path.cwd())
+    out = recall_lines(graph, term, Path.cwd(), budget)
     if not out:
         stdout.write(f'Nothing found for "{term}".\n')
         return 0
@@ -470,7 +487,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.statusline import setup_statusline_main
 
         return setup_statusline_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <term> | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who|helper] [--json] | savings [--json] | audit [--project <dir>] [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <word> [--budget N] | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who|helper] [--json] | savings [--json] | audit [--project <dir>] [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
     return 2
 
 

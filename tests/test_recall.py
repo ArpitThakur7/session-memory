@@ -72,3 +72,61 @@ def test_session_nodes_are_not_listed_and_paths_are_project_relative(tmp_path):
                str(tmp_path / "src" / "context.py").replace("\\", "/"), "2026-11-05T08:00:00Z")
     lines = recall_lines(g, "context", root=tmp_path)
     assert kinds(lines) == ["file"] and "] src/context.py" in lines[0]
+
+
+def big_graph(n=40):
+    g = Graph()
+    for i in range(n):
+        g.add_node("task", f"t{i}", f"context request number {chr(65 + i // 26)}{chr(65 + i % 26)} " + "padding words " * 6,
+                   f"2026-11-0{1 + i % 5}T08:00:00Z")
+    return g
+
+
+def test_budget_caps_output_and_says_how_many_more():
+    lines = recall_lines(big_graph(), "context", budget=100)
+    text = "\n".join(lines)
+    assert len(text) <= 100 * 4
+    assert lines[-1].startswith("… ") and lines[-1].endswith(" more — narrow the word")
+    shown = len(lines) - 1
+    assert lines[-1] == f"… {40 - shown} more — narrow the word"
+
+
+def test_default_budget_is_600_tokens_and_no_footer_when_all_fit():
+    from memgraph.memory_ops import DEFAULT_RECALL_BUDGET
+    assert DEFAULT_RECALL_BUDGET == 600
+    assert len("\n".join(recall_lines(big_graph(), "context"))) <= 2400
+    small = recall_lines(big_graph(2), "context")
+    assert len(small) == 2 and not small[-1].startswith("…")
+
+
+def test_tiny_budget_still_shows_a_clipped_first_line():
+    lines = recall_lines(big_graph(3), "context", budget=10)
+    assert len("\n".join(lines)) <= 40 and lines[0].startswith("[task]")
+
+
+def test_cli_budget_flag(tmp_path, monkeypatch):
+    import io
+    from memgraph.cli import main
+    from memgraph.ingest import memory_dir
+    big_graph().save(memory_dir(tmp_path) / "graph.json")
+    monkeypatch.chdir(tmp_path)
+    for argv in (["recall", "context", "--budget", "80"], ["recall", "context --budget=80"]):
+        out = io.StringIO()
+        assert main(argv, stdin=io.StringIO(""), stdout=out) == 0
+        text = out.getvalue()
+        assert len(text.rstrip("\n")) <= 320 and "more — narrow the word" in text
+    out = io.StringIO()
+    assert main(["recall", "context", "--budget", "zero"], stdin=io.StringIO(""), stdout=out) == 2
+    assert "Usage: recall <word> [--budget N]" in out.getvalue()
+
+
+def test_mcp_budget_argument(tmp_path):
+    from tests.test_mcp import call, drive
+    from memgraph.ingest import memory_dir
+    proj = tmp_path / "proj"
+    big_graph().save(memory_dir(proj) / "graph.json")
+    ok, bad = drive(proj, call(1, "memory_recall", query="context", budget=80),
+                    call(2, "memory_recall", query="context", budget=-5))
+    text = ok["result"]["content"][0]["text"]
+    assert len(text) <= 320 and text.endswith("more — narrow the word")
+    assert bad["result"]["isError"] is True

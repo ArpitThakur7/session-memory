@@ -12,7 +12,7 @@ from typing import BinaryIO
 from memgraph.brief import MCP_FOOTER, build_brief
 from memgraph.graph import Graph, GraphBusy, update
 from memgraph.ingest import memory_dir
-from memgraph.memory_ops import BUSY, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
+from memgraph.memory_ops import BUSY, DEFAULT_RECALL_BUDGET, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
 from memgraph.pack import SIZES, build_pack
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
@@ -27,10 +27,12 @@ TOOLS = [
     },
     {
         "name": "memory_recall",
-        "description": "Search project memory (tasks, files, commands, errors, decisions) for a term.",
+        "description": "Search project memory (tasks, files, commands, errors, decisions) for a term, best first, within a token budget.",
         "inputSchema": {
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "Search term"}},
+            "properties": {"query": {"type": "string", "description": "Search term"},
+                           "budget": {"type": "integer", "minimum": 1, "maximum": 100000,
+                                      "description": "Most tokens to return (about 4 characters each); default 600"}},
             "required": ["query"],
         },
     },
@@ -121,6 +123,13 @@ def _log(mem: Path | None) -> None:
             continue
 
 
+def _budget_arg(args: dict) -> int:
+    budget = args.get("budget", DEFAULT_RECALL_BUDGET)
+    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 100_000:
+        raise ValueError("budget must be an integer from 1 to 100000 (tokens)")
+    return budget
+
+
 def _text(s: str) -> dict:
     return {"type": "text", "text": s}
 
@@ -141,7 +150,8 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
         query = query.strip()
-        lines = recall_lines(graph, query, project)
+        budget = _budget_arg(args)
+        lines = recall_lines(graph, query, project, budget)
         return [_text("\n".join(lines) if lines else f'Nothing found for "{query}".')]
     if name == "memory_usage":
         return [_text(_usage_text(args, mem, project))]
