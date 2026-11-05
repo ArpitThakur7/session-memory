@@ -181,3 +181,107 @@ def related_memory(graph, prompt: str, root: Path | None = None) -> tuple[str, i
         size += 1 + len(line)
         hits += 1
     return ("\n".join(lines), hits) if hits else ("", 0)
+
+
+# ---- /recall: one word looked up on purpose ------------------------------------------
+
+RECALL_KIND_WEIGHTS = {"decision": 5.0, "task": 4.0, "error": 3.0, "file": 2.0, "command": 1.0}
+RECALL_KINDS = tuple(RECALL_KIND_WEIGHTS)
+MAX_RECALL_COMMANDS = 3   # command groups shown at most; commands are the noisiest kind
+SUBSTRING_ONLY = 0.7      # a label that only contains the word inside another word
+_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+_PATHISH = re.compile(r"[^\s\"'`|;&<>()=]*[/\][^\s\"'`|;&<>()]*|\b[\w.-]+\.[A-Za-z][\w]{0,5}\b")
+_SEGMENTS = re.compile(r"&&|\|\||;|\|")
+_SETUP_WORDS = frozenset(("cd", "set", "export", "pushd", "source", "."))
+
+
+def command_group_key(text: str) -> str:
+    """Near-identical commands share this: quoted text, paths, file names and numbers blanked."""
+    t = _QUOTED.sub('""', str(text).casefold())
+    t = _PATHISH.sub("[path]", t)
+    t = _DIGITS.sub("#", t)
+    return " ".join(t.split())
+
+
+def command_head(text: str) -> str:
+    """The program a command runs: the first word of its first segment that is not cd/export/..."""
+    first = ""
+    for seg in _SEGMENTS.split(str(text)):
+        words = seg.split()
+        if not words:
+            continue
+        word = words[0].replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        word = word[:-4] if word.endswith(".exe") else word
+        first = first or word
+        if word not in _SETUP_WORDS:
+            return word
+    return first
+
+
+def _command_factors(graph) -> dict[str, float]:
+    """Per command node: an IDF-style factor in (0, 1] that dampens programs run all the time."""
+    heads = {nid: command_head(n.get("label", "")) for nid, n in graph.nodes.items() if n.get("kind") == "command"}
+    n = len(heads)
+    df: dict[str, int] = {}
+    for h in heads.values():
+        df[h] = df.get(h, 0) + 1
+    out = {}
+    for nid, h in heads.items():
+        idf = math.log(1 + n / df[h]) / math.log(1 + n) if n > 1 else 1.0
+        count = graph.nodes[nid].get("count") or 1
+        out[nid] = idf / (1 + 0.25 * math.log(max(1, int(count))))
+    return out
+
+
+def recall(graph, query: str, root: Path | None = None, weight=None) -> list[dict]:
+    """Nodes whose label holds `query`, best first, one entry per displayed text.
+
+    Each entry: {"node", "shown", "score", "similar"} where `similar` counts near-identical
+    commands folded into it. Ranked by kind (decision > task > error > file > command), then
+    whole-word over substring matches, with frequent or generic commands dampened and at most
+    MAX_RECALL_COMMANDS command groups. `weight(node) -> float` may scale scores further.
+    """
+    needle = " ".join(str(query).split()).casefold()
+    if not needle:
+        return []
+    qtoks = set(tokenize(needle))
+    factors = _command_factors(graph)
+    groups: dict[tuple, dict] = {}
+    for nid, node in graph.nodes.items():
+        kind, label = node.get("kind"), node.get("label")
+        if kind not in RECALL_KIND_WEIGHTS or not isinstance(label, str):
+            continue
+        flat = " ".join(label.split())
+        whole = bool(qtoks) and qtoks <= set(tokenize(flat))
+        if not whole and needle not in flat.casefold():
+            continue
+        shown = _scrub(flat, root) if root is not None else flat
+        if not shown or (kind == "file" and shown == "[path]"):
+            continue
+        score = RECALL_KIND_WEIGHTS[kind] * (1.0 if whole else SUBSTRING_ONLY)
+        if kind == "command":
+            score *= factors.get(nid, 1.0)
+            key = (kind, command_group_key(shown))
+        else:
+            key = (kind, _DIGITS.sub("#", shown.casefold()))
+        if weight is not None:
+            score *= weight(node)
+        entry = {"node": node, "shown": shown, "score": score, "similar": 0}
+        old = groups.get(key)
+        if old is None:
+            groups[key] = entry
+            continue
+        best = max(old["score"], score)
+        newer = entry if str(node.get("last") or "") > str(old["node"].get("last") or "") else old
+        newer["similar"] = old["similar"] + 1
+        newer["score"] = best
+        groups[key] = newer
+    ranked = sorted(groups.values(), key=lambda e: (-round(e["score"], 9), _neg(e["node"].get("last")), e["shown"]))
+    out, commands = [], 0
+    for e in ranked:
+        if e["node"].get("kind") == "command":
+            if commands >= MAX_RECALL_COMMANDS:
+                continue
+            commands += 1
+        out.append(e)
+    return out

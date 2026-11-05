@@ -141,7 +141,7 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
         query = query.strip()
-        lines = recall_lines(graph, query)
+        lines = recall_lines(graph, query, project)
         return [_text("\n".join(lines) if lines else f'Nothing found for "{query}".')]
     if name == "memory_usage":
         return [_text(_usage_text(args, mem, project))]

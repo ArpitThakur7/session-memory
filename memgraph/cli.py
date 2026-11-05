@@ -223,7 +223,7 @@ def _recall(args: list[str], stdout: TextIO) -> int:
 
     term = " ".join(args).strip()
     _, graph = _project()
-    out = recall_lines(graph, term)
+    out = recall_lines(graph, term, Path.cwd())
     if not out:
         stdout.write(f'Nothing found for "{term}".\n')
         return 0

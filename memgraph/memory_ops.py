@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from memgraph.graph import Graph, _digest
 from memgraph.redact import redact
+from memgraph.search import recall
 
 RECALL_MAX_CHARS = 2000
 REMEMBER_MAX_CHARS = 1000
@@ -12,12 +14,12 @@ TOO_LONG = "Text too long ({n:,} characters); the limit is 1,000. Save a shorter
 BUSY = "Not saved: project memory is busy (another update is running). Try again."
 
 
-def recall_lines(graph: Graph, query: str) -> list[str]:
-    """Search lines `[kind] label (last YYYY-MM-DD)`, clipped to RECALL_MAX_CHARS in total."""
+def recall_lines(graph: Graph, query: str, root: Path | None = None) -> list[str]:
+    """Ranked lines `[kind] label (last YYYY-MM-DD)`, clipped to RECALL_MAX_CHARS in total."""
     lines = []
-    for node in graph.search(query, 20):
-        label = " ".join(str(node.get("label", "")).split())
-        lines.append(f"[{node.get('kind')}] {label} (last {str(node.get('last') or '')[:10]})")
+    for e in recall(graph, query, root):
+        similar = f" (+{e['similar']} similar)" if e["similar"] else ""
+        lines.append(f"[{e['node'].get('kind')}] {e['shown']}{similar} (last {str(e['node'].get('last') or '')[:10]})")
     out, used = [], 0
     for line in lines:
         room = RECALL_MAX_CHARS - used - 1
