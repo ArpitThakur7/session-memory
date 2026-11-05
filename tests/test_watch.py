@@ -107,7 +107,8 @@ def test_arm_writes_deadline_and_spawns_once(tmp_path, monkeypatch):
     assert len(spawn.calls) == 1
 
 
-def test_arm_skips_spawn_without_reply_or_when_already_notified(tmp_path):
+def test_arm_skips_spawn_without_reply_or_when_already_notified(tmp_path, monkeypatch):
+    monkeypatch.delenv("SESSION_MEMORY_CACHE_TTL_MIN", raising=False)  # deadline below assumes the 60-min default
     project, mem = setup_mem(tmp_path, with_graph=False)
     spawn = FakeSpawn()
     arm(mem, tmp_path / "missing.jsonl", project, T0, spawn=spawn)  # no reply time: nothing to watch

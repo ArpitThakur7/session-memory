@@ -31,3 +31,9 @@ def _no_claude_dirs(monkeypatch):
     """Running inside Claude Code must not point tests at the real project or config folder."""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _default_cache_ttl(monkeypatch):
+    """A cache TTL set in the developer's shell must not change deadline expectations."""
+    monkeypatch.delenv("SESSION_MEMORY_CACHE_TTL_MIN", raising=False)
