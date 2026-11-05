@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from memgraph.brief import display_path, where_things_stand
-from memgraph.graph import Graph
+from memgraph.graph import Graph, edge_conf
 from memgraph.pack import PACK_FILE
 from memgraph.visual import IMAGE_FILE, IMAGE_SIZE, has_story, render_visual_pack
 
@@ -73,7 +73,7 @@ def build_view_data(graph: Graph, project_name: str, project_root: Path | None =
     ids = {n["id"] for n in nodes}
     edges = [
         {"s": e["src"], "d": e["dst"], "r": str(e.get("rel", "")),
-         "c": e.get("count") if isinstance(e.get("count"), int) else 1}
+         "c": e.get("count") if isinstance(e.get("count"), int) else 1, "f": edge_conf(e)}
         for e in graph.edges.values()
         if isinstance(e, dict) and e.get("src") in ids and e.get("dst") in ids
     ]

@@ -5,7 +5,7 @@ import ntpath
 import posixpath
 from pathlib import Path
 
-from memgraph.graph import Graph
+from memgraph.graph import EXTRACTED, Graph, edge_conf
 from memgraph.relevance import is_absolute, is_drive_path, is_project_file, native_path, project_errors
 from memgraph.transcript import clean_prompt, fmt_local
 
@@ -87,6 +87,30 @@ def _changed_files(graph: Graph, files: list[dict], project_root: Path | None) -
     return [f"- {_one_line(p)}" for p in shown]
 
 
+def _error_link(graph: Graph, error: dict, project_root: Path | None) -> str:
+    """` (src/x.py, extracted)` for the project file an error came from, or `inferred` when its text only names it."""
+    best = None
+    for e in graph.edges.values():
+        if not isinstance(e, dict):
+            continue
+        if e.get("rel") == "failed" and e.get("dst") == error.get("id"):
+            fid = e.get("src")
+        elif e.get("rel") == "mentions" and e.get("src") == error.get("id"):
+            fid = e.get("dst")
+        else:
+            continue
+        node = graph.nodes.get(fid) or {}
+        if node.get("kind") != "file" or not is_project_file(node.get("label", ""), project_root):
+            continue
+        path = display_path(str(node.get("label", "")), project_root)
+        if path is None:
+            continue
+        conf = edge_conf(e)
+        if best is None or (conf == EXTRACTED and best[1] != EXTRACTED):
+            best = (path, conf)
+    return f" ({_one_line(best[0])}, {best[1]})" if best else ""
+
+
 def _earlier_requests(graph: Graph, last_prompt) -> list[str]:
     recent = [r for r in graph.meta.get("recent_prompts") or [] if isinstance(r, dict)]
     if isinstance(last_prompt, dict):
@@ -162,7 +186,7 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
     decisions = [f"- {_one_line(n.get('label', ''))}"
                  for n in _newest(by_kind("decision"), _MAX_DECISIONS)]
     files = _changed_files(graph, by_kind("file"), project_root)
-    errors = [f"- {_one_line(n.get('label', ''))}"
+    errors = [f"- {_one_line(n.get('label', ''))}{_error_link(graph, n, project_root)}"
               for n in _newest(project_errors(graph, by_kind("error"), project_root), _MAX_ERRORS)]
     sections = [
         (f"## Next steps (as of {todo_stamp})" if todo_stamp else "## Next steps", next_steps),

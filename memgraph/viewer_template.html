@@ -718,7 +718,7 @@ const DATA = /*__MEMORY_DATA__*/null;
   for (const e of DATA.edges || []) {
     const s = items.get(String(e.s)), d = items.get(String(e.d));
     if (!s || !d || s === d) continue;
-    const ed = { s: s, d: d, r: String(e.r || ''), c: Math.max(1, Number(e.c) || 1) };
+    const ed = { s: s, d: d, r: String(e.r || ''), c: Math.max(1, Number(e.c) || 1), f: e.f === 'inferred' ? 'inferred' : 'extracted' };
     edges.push(ed);
     s.out.push(ed);
     d.inc.push(ed);
@@ -958,7 +958,7 @@ const DATA = /*__MEMORY_DATA__*/null;
         const k = key(A, B);
         if (seen.has(k)) continue;
         seen.add(k);
-        links.push({ a: A, b: B, rel: e.r, rest: 90, k: 0.035, tree: false, dashed: false });
+        links.push({ a: A, b: B, rel: e.r, rest: 90, k: 0.035, tree: false, dashed: e.f === 'inferred' }); // a guessed link is drawn dashed
         A.deg++; B.deg++;
       } else proxies.push([A, B, e.r]);
     }
@@ -3027,8 +3027,8 @@ const DATA = /*__MEMORY_DATA__*/null;
     if (it.isRoot) for (const c of it.children) push('Contains ' + kindInfo(c.kind).plural.toLowerCase(), c);
     else {
       const outs = it.out.slice().sort((a, b) => OUT_ORDER.indexOf(a.r) - OUT_ORDER.indexOf(b.r));
-      for (const e of outs) push(e.r.charAt(0).toUpperCase() + e.r.slice(1), e.d);
-      for (const e of it.inc) { const l = IN_LABEL[e.r] || e.r + ' by'; push(l.charAt(0).toUpperCase() + l.slice(1), e.s); }
+      for (const e of outs) push(e.r.charAt(0).toUpperCase() + e.r.slice(1) + (e.f === 'inferred' ? ' (inferred)' : ''), e.d);
+      for (const e of it.inc) { const l = IN_LABEL[e.r] || e.r + ' by'; push(l.charAt(0).toUpperCase() + l.slice(1) + (e.f === 'inferred' ? ' (inferred)' : ''), e.s); }
     }
     let total = 0;
     for (const [name, list] of groups) {

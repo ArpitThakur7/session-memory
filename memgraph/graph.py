@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -17,6 +18,11 @@ from memgraph.transcript import Event, parse_ts
 _MAX_TOOL_NODES = 500
 _MAX_LABEL = 200
 _MAX_RECENT_PROMPTS = 5
+SCHEMA_VERSION = 2  # 2: every edge has "conf" ("extracted" or "inferred")
+EXTRACTED, INFERRED = "extracted", "inferred"
+CONFS = (EXTRACTED, INFERRED)
+_REL_CONF = {"mentions": INFERRED}  # links guessed from text; the rest were seen in a transcript turn
+_MAX_MENTIONS = 3
 _NO_TIME = datetime.min.replace(tzinfo=timezone.utc)  # sorts entries with no usable time last
 
 
@@ -61,6 +67,27 @@ def _apply_todo_delta(items, delta: dict) -> None:
     if delta.get("complete_all"):
         for t in todos:
             t["status"] = "completed"
+
+
+def edge_conf(edge) -> str:
+    """An edge's confidence tag; a missing or unknown tag falls back to the tag its relation implies."""
+    if not isinstance(edge, dict):
+        return EXTRACTED
+    conf = edge.get("conf")
+    return conf if conf in CONFS else _REL_CONF.get(edge.get("rel"), EXTRACTED)
+
+
+def node_confs(graph) -> dict[str, str]:
+    """Node id -> "extracted" when any edge touching it is, else "inferred"; nodes without edges are absent."""
+    out: dict[str, str] = {}
+    for e in graph.edges.values():
+        if not isinstance(e, dict):
+            continue
+        conf = edge_conf(e)
+        for nid in (e.get("src"), e.get("dst")):
+            if out.get(nid) != EXTRACTED:
+                out[nid] = conf
+    return out
 
 
 def _digest(text: str) -> str:
@@ -159,11 +186,14 @@ class Graph:
         nodes, edges, meta = data.get("nodes"), data.get("edges"), data.get("meta")
         if isinstance(nodes, dict) and isinstance(edges, dict) and isinstance(meta, dict):
             g.nodes, g.edges, g.meta = nodes, edges, meta
+            for edge in edges.values():  # graphs before schema 2 have no tags; any version is read the same way
+                if isinstance(edge, dict) and edge.get("conf") not in CONFS:
+                    edge["conf"] = edge_conf(edge)
         return g
 
     def save(self, path: Path) -> None:
         """Atomically write the graph to `path`."""
-        write_json_atomic(path, {"nodes": self.nodes, "edges": self.edges, "meta": self.meta})
+        write_json_atomic(path, {"schema_version": SCHEMA_VERSION, "nodes": self.nodes, "edges": self.edges, "meta": self.meta})
 
     # ---- mutation ----------------------------------------------------
 
@@ -183,12 +213,16 @@ class Graph:
                     node["first"] = ts
         return node_id
 
-    def add_edge(self, src: str, rel: str, dst: str, ts: str) -> None:
+    def add_edge(self, src: str, rel: str, dst: str, ts: str, conf: str | None = None) -> None:
+        """Add or count a link. `conf` defaults to the relation's tag; an extracted sighting upgrades an inferred link."""
+        conf = conf if conf in CONFS else _REL_CONF.get(rel, EXTRACTED)
         key = f"{src}|{rel}|{dst}"
         edge = self.edges.get(key)
         if edge is None:
-            self.edges[key] = {"src": src, "rel": rel, "dst": dst, "count": 1, "last": ts}
+            self.edges[key] = {"src": src, "rel": rel, "dst": dst, "count": 1, "last": ts, "conf": conf}
         else:
+            if conf == EXTRACTED:
+                edge["conf"] = EXTRACTED
             edge["count"] += 1
             if ts:
                 edge["last"] = ts
@@ -245,6 +279,7 @@ class Graph:
             node = self.add_node("error", _digest(text), text[:_MAX_LABEL], stamp)
             src = self.meta["tool_nodes"][data["tool_use_id"]]
             self.add_edge(src, "failed", node, stamp)
+            self._link_mentions(node, text, src, stamp)
         elif kind == "todo":
             items = [dict(t) for t in data.get("items") or [] if isinstance(t, dict)]
             self.meta.setdefault("todos", {})[sid] = items
@@ -261,6 +296,24 @@ class Graph:
         elif kind == "usage":
             if isinstance(data.get("context"), int):
                 sess["context"] = data["context"]
+
+    def _link_mentions(self, error_id: str, text: str, skip: str, stamp: str) -> None:
+        """Inferred links from an error to known file nodes whose path (or file name) its text names."""
+        flat = text.replace("\\", "/")
+        words = set(re.findall(r"[\w.-]+", flat))
+        added = 0
+        for nid, node in self.nodes.items():
+            if node.get("kind") != "file" or nid == skip:
+                continue
+            path = str(node.get("label") or "")
+            name = path.rsplit("/", 1)[-1]
+            if not path or not ((len(path) > 4 and re.search(r"(?<![\w.-])" + re.escape(path) + r"(?![\w-])", flat))
+                                or ("." in name and len(name) >= 5 and name in words)):
+                continue
+            self.add_edge(error_id, "mentions", nid, stamp)
+            added += 1
+            if added >= _MAX_MENTIONS:
+                break
 
     def _remember_prompt(self, entry: dict) -> None:
         """Keep meta["recent_prompts"]: the newest prompts overall by time, no exact repeats."""

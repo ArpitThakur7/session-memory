@@ -74,7 +74,7 @@ def test_add_edge_without_nodes_and_repeat_counts():
     g = Graph()
     g.add_edge("a:1", "rel", "b:2", "t1"); g.add_edge("a:1", "rel", "b:2", "t2")
     e = g.edges["a:1|rel|b:2"]
-    assert e == {"src": "a:1", "rel": "rel", "dst": "b:2", "count": 2, "last": "t2"}
+    assert e == {"src": "a:1", "rel": "rel", "dst": "b:2", "count": 2, "last": "t2", "conf": "extracted"}
 
 
 def test_windows_path_normalised_and_read_edge():
