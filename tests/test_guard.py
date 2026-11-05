@@ -19,7 +19,8 @@ def test_reason_text_is_exact():
     assert r == (
         "Cache guard: this chat has been idle for 90 minutes, so its prompt cache has likely expired. "
         "Sending now re-reads about 140,000 tokens at full price.\n"
-        "Cheaper: type /clear. Your project memory loads automatically as a short brief.\n"
+        "Type /clear to start fresh with your memory brief. To open the memory map without Claude, run: "
+        + guard_mod.map_command() + "\n"
         "To send anyway, send the same message again within 10 minutes."
     )
 
@@ -40,8 +41,29 @@ def test_allows_exactly_at_token_threshold():
     assert decide(NOW, NOW - timedelta(hours=5), 30000, "go", {}, GuardConfig()) is None
 
 
-def test_allows_slash_commands():
-    assert decide(NOW, NOW - timedelta(hours=5), 140000, "/clear", {}, GuardConfig()) is None
+def test_allows_builtin_commands_that_skip_the_model():
+    old = NOW - timedelta(hours=5)
+    for p in ("/clear", "/compact keep notes", "/model sonnet", "/MODEL", "/help", "/cost"):
+        assert decide(NOW, old, 140000, p, {}, GuardConfig()) is None, p
+
+
+def test_blocks_plugin_and_model_running_slash_commands():
+    old = NOW - timedelta(hours=5)
+    for p in ("/session-memory:memory-map", "/recall foo", "/init", "/review", "/statusline", "/security-review", "/pr-comments", "/clearx"):
+        r = decide(NOW, old, 140000, p, {}, GuardConfig())
+        assert r and "idle for 300 minutes" in r, p
+
+
+def test_slash_command_repeat_goes_through_and_warm_chat_allowed():
+    s = {}; old = NOW - timedelta(hours=5)
+    assert decide(NOW, old, 840000, "/session-memory:memory-map", s, GuardConfig())
+    assert decide(NOW + timedelta(minutes=2), old, 840000, "/session-memory:memory-map", s, GuardConfig()) is None
+    assert decide(NOW, NOW - timedelta(minutes=5), 840000, "/recall foo", {}, GuardConfig()) is None
+
+
+def test_block_message_names_the_launcher():
+    r = decide(NOW, NOW - timedelta(hours=5), 140000, "/recall foo", {}, GuardConfig())
+    assert "Type /clear to start fresh with your memory brief." in r and "run-python" in r and " map" in r
 
 
 def test_same_message_again_goes_through():

@@ -15,9 +15,34 @@ _TAIL_BYTES = 256 * 1024
 _REASON = (
     "Cache guard: this chat has been idle for {idle} minutes, so its prompt cache has likely expired. "
     "Sending now re-reads about {context:,} tokens at full price.\n"
-    "Cheaper: type /clear. Your project memory loads automatically as a short brief.\n"
+    "Type /clear to start fresh with your memory brief. To open the memory map without Claude, run: {map_cmd}\n"
     "To send anyway, send the same message again within 10 minutes."
 )
+
+
+# Claude Code built-in commands that never call the model: they pass the guard.
+# Everything else starting with "/" (plugin commands, skills, custom commands, and
+# built-ins that run the model such as /init or /review) is guarded like a normal prompt.
+FREE_COMMANDS = frozenset(
+    "clear compact help exit quit model config settings cost usage status context doctor login logout "
+    "mcp hooks permissions plugin plugins resume rewind theme vim fast effort output-style terminal-setup "
+    "add-dir agents memory export release-notes upgrade ide todos bug feedback privacy-settings".split()
+)
+
+
+def map_command() -> str:
+    """Command line that opens the memory map without Claude (the launcher in this repo)."""
+    name = "run-python.cmd" if os.name == "nt" else "run-python"
+    path = str(Path(__file__).resolve().parent.parent / "bin" / name)
+    return f'"{path}" map' if " " in path else f"{path} map"
+
+
+def _is_free_command(prompt: str) -> bool:
+    text = prompt.lstrip()
+    if not text.startswith("/"):
+        return False
+    word = text[1:].split(None, 1)[0].lower() if text[1:].strip() else ""
+    return word in FREE_COMMANDS
 
 
 @dataclass
@@ -128,8 +153,8 @@ def decide(
     """The block reason, or None to allow. Records/clears state["guard"]."""
     if last_ts is None or context is None:
         return None
-    if prompt.startswith("/") or prompt.lstrip().startswith("<"):
-        return None  # slash commands; task notifications, agent reports, cross-session messages
+    if _is_free_command(prompt) or prompt.lstrip().startswith("<"):
+        return None  # built-in commands that skip the model; task notifications, agent reports, cross-session messages
     now, last_ts = _utc(now), _utc(last_ts)
     idle = now - last_ts
     if idle <= timedelta(minutes=cfg.idle_minutes) or context <= cfg.min_tokens:
@@ -144,4 +169,4 @@ def decide(
             return None
 
     state["guard"] = {"hash": digest, "at": now.isoformat()}
-    return _REASON.format(idle=int(idle.total_seconds() // 60), context=context)
+    return _REASON.format(idle=int(idle.total_seconds() // 60), context=context, map_cmd=map_command())

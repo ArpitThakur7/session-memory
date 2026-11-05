@@ -4,6 +4,10 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 
 ## Unreleased
 
+### Fixed
+
+- **Cache guard let model-running slash commands through.** Any prompt starting with `/` skipped the guard, so `/session-memory:memory-map` as the first message of a cold 886k-token chat rebuilt the whole cache (840,843 tokens written). Now only built-in commands that do not call the model (`/clear`, `/compact`, `/model`, `/help` and similar) pass; plugin commands, skills, custom commands and model-running built-ins (`/init`, `/review`, ...) are blocked once like a normal message. The block message now points to `/clear` and to the launcher command that opens the memory map without Claude.
+
 ### Added
 
 - **Installers.** `install.ps1` (Windows PowerShell 5.1 and 7) and `install.sh` (macOS, Linux, Git Bash) find Python, offer Pillow, install the plugin and run `doctor`. Both have a dry-run and an uninstall mode.
