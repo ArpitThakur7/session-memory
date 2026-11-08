@@ -78,55 +78,14 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
     as the reply's cache writes."""
     usage = usage if usage is not None else collect_usage(transcripts_dir)
     events = read_events(mem_dir)
-    first_reply: dict[str, Reply] = {}
     by_session: dict[str, list[Reply]] = {}
     for r in usage.replies:  # oldest first
-        if r.helper:
-            continue
-        first_reply.setdefault(r.session, r)
-        by_session.setdefault(r.session, []).append(r)
+        if not r.helper:
+            by_session.setdefault(r.session, []).append(r)
 
-    fresh, seen, pending = [], set(), 0
-    brief_chars = None
-    for ev in events:
-        if ev.get("type") != "fresh_start":
-            continue
-        if _int(ev.get("brief_chars")) is not None:
-            brief_chars = ev["brief_chars"]
-        sid, prev_context = ev.get("session"), _int(ev.get("prev_context"))
-        if not isinstance(sid, str) or sid in seen or prev_context is None:
-            continue
-        seen.add(sid)
-        reply = first_reply.get(sid)
-        if reply is None:
-            pending += 1  # the new chat has no reply yet
-            continue
-        saved = max(0, prev_context - reply.context)
-        event_ts = parse_ts(ev.get("t"))
-        prev_sid = ev.get("prev_session")
-        older = [r for r in by_session.get(prev_sid, []) if event_ts is None or r.ts <= event_ts] \
-            if isinstance(prev_sid, str) else []
-        state, would = _resume_usd(older[-1] if older else None, prev_context, event_ts, ttl_minutes)
-        actual_usd = reply_cost(reply)
-        fresh.append({"t": ev.get("t"), "session": sid, "prev_session": prev_sid,
-                      "prev_context": prev_context, "actual": reply.context, "saved": saved,
-                      "cache_state": state, "would_have_usd": would, "actual_usd": actual_usd,
-                      "saved_usd": None if would is None or actual_usd is None else would - actual_usd})
-
+    fresh, pending, brief_chars = _fresh_start_rows(events, by_session, ttl_minutes)
     estimate = brief_chars // 4 if brief_chars is not None else DEFAULT_BRIEF_TOKENS
-    cold = []
-    for sid, replies in by_session.items():
-        for prev, nxt in zip(replies, replies[1:]):
-            idle = nxt.ts - prev.ts
-            if idle <= timedelta(minutes=ttl_minutes) or nxt.cache_write == 0:
-                continue
-            could = max(0, nxt.cache_write - estimate)
-            usd = _rebuild_usd(nxt)
-            cold.append({"t": nxt.ts.isoformat(), "session": sid, "idle_minutes": int(idle.total_seconds() // 60),
-                         "rebuild_tokens": nxt.cache_write, "rebuild_usd": usd,
-                         "with_plugin_estimate": estimate, "could_have_saved_estimate": could,
-                         "could_have_saved_estimate_usd": None if usd is None else usd * could / nxt.cache_write})
-    cold.sort(key=lambda r: r["t"])
+    cold = _cold_restart_rows(by_session, ttl_minutes, estimate)
 
     def usd_sum(rows, key):
         vals = [r[key] for r in rows if r[key] is not None]
@@ -145,6 +104,59 @@ def measure_savings(transcripts_dir: Path, mem_dir: Path, ttl_minutes: int,
     }
     return {"fresh_starts": fresh, "cold_restarts": cold, "totals": totals,
             "ttl_minutes": ttl_minutes, "brief_tokens_estimate": estimate, "prices_as_of": PRICES_AS_OF}
+
+
+def _fresh_start_rows(events: list[dict], by_session: dict[str, list[Reply]],
+                      ttl_minutes: int) -> tuple[list[dict], int, int | None]:
+    """(one row per chat started fresh with a brief, how many have no reply yet, the newest brief size).
+
+    A row compares the old chat's context with the new chat's first reply, in tokens and dollars."""
+    fresh, seen, pending = [], set(), 0
+    brief_chars = None
+    for ev in events:
+        if ev.get("type") != "fresh_start":
+            continue
+        if _int(ev.get("brief_chars")) is not None:
+            brief_chars = ev["brief_chars"]
+        sid, prev_context = ev.get("session"), _int(ev.get("prev_context"))
+        if not isinstance(sid, str) or sid in seen or prev_context is None:
+            continue
+        seen.add(sid)
+        reply = (by_session.get(sid) or [None])[0]
+        if reply is None:
+            pending += 1  # the new chat has no reply yet
+            continue
+        saved = max(0, prev_context - reply.context)
+        event_ts = parse_ts(ev.get("t"))
+        prev_sid = ev.get("prev_session")
+        older = [r for r in by_session.get(prev_sid, []) if event_ts is None or r.ts <= event_ts] \
+            if isinstance(prev_sid, str) else []
+        state, would = _resume_usd(older[-1] if older else None, prev_context, event_ts, ttl_minutes)
+        actual_usd = reply_cost(reply)
+        fresh.append({"t": ev.get("t"), "session": sid, "prev_session": prev_sid,
+                      "prev_context": prev_context, "actual": reply.context, "saved": saved,
+                      "cache_state": state, "would_have_usd": would, "actual_usd": actual_usd,
+                      "saved_usd": None if would is None or actual_usd is None else would - actual_usd})
+    return fresh, pending, brief_chars
+
+
+def _cold_restart_rows(by_session: dict[str, list[Reply]], ttl_minutes: int, estimate: int) -> list[dict]:
+    """One row per reply that came after the cache expired and rebuilt it, with what a fresh start
+    (about `estimate` tokens of brief) would have cost instead. Oldest first."""
+    cold = []
+    for sid, replies in by_session.items():
+        for prev, nxt in zip(replies, replies[1:]):
+            idle = nxt.ts - prev.ts
+            if idle <= timedelta(minutes=ttl_minutes) or nxt.cache_write == 0:
+                continue
+            could = max(0, nxt.cache_write - estimate)
+            usd = _rebuild_usd(nxt)
+            cold.append({"t": nxt.ts.isoformat(), "session": sid, "idle_minutes": int(idle.total_seconds() // 60),
+                         "rebuild_tokens": nxt.cache_write, "rebuild_usd": usd,
+                         "with_plugin_estimate": estimate, "could_have_saved_estimate": could,
+                         "could_have_saved_estimate_usd": None if usd is None else usd * could / nxt.cache_write})
+    cold.sort(key=lambda r: r["t"])
+    return cold
 
 
 SUMMARY_FILE = "summary.json"

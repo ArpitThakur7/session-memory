@@ -44,71 +44,97 @@ def _ingest(payload: dict, mem: Path) -> Graph:
 
 
 def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
-    if name in ("hook-pre-read", "hook-post-read", "hook-compact"):
-        from memgraph import readguard
+    _HOOK_HANDLERS[name](payload, mem, stdout, now)
 
-        if name == "hook-post-read":
-            readguard.record(payload, mem, now)
-        elif name == "hook-compact":
-            readguard.bump_compaction(payload, mem)
-        else:
-            reason = readguard.check(payload, mem, now)
-            event = {"type": "read_denied", "session": payload.get("session_id")}
-            if not reason and _may_steer(payload):
-                from memgraph import codeindex
 
-                steer = codeindex.big_read_steer(payload, project_root(payload["cwd"]), mem, now)
-                if steer:
-                    reason, event = steer
-            if reason:
-                _emit(stdout, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                      "permissionDecisionReason": reason}})
-                _log_event(mem, event)
-        return
+def _hook_pre_read(payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
+    """Before a Read: refuse a re-read of unchanged lines, or steer a whole big file to its outline."""
+    from memgraph import readguard
+
+    reason = readguard.check(payload, mem, now)
+    event = {"type": "read_denied", "session": payload.get("session_id")}
+    if not reason and _may_steer(payload):
+        from memgraph import codeindex
+
+        steer = codeindex.big_read_steer(payload, project_root(payload["cwd"]), mem, now)
+        if steer:
+            reason, event = steer
+    if reason:
+        _emit(stdout, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                              "permissionDecisionReason": reason}})
+        _log_event(mem, event)
+
+
+def _hook_post_read(payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
+    """After a Read succeeded: remember which lines are now in the chat."""
+    from memgraph import readguard
+
+    readguard.record(payload, mem, now)
+
+
+def _hook_compact(payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
+    """Compaction dropped earlier reads from the chat, so they may be read again."""
+    from memgraph import readguard
+
+    readguard.bump_compaction(payload, mem)
+
+
+def _hook_stop(payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
+    """After each reply: update the memory graph, re-arm the cache watcher, refresh the status line figures."""
+    from memgraph import savings, watch
+
+    _ingest(payload, mem)
+    watch.arm(mem, Path(payload["transcript_path"]), project_root(payload["cwd"]), now)
+    try:  # the status line's "saved" figure; cheap unless new events arrived
+        savings.refresh_summary(Path(os.path.dirname(payload["transcript_path"])), mem, watch.ttl_minutes(), now)
+    except Exception:
+        log_error(mem)
+
+
+def _hook_session_start(payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
+    """New chat, /clear or compaction: write the resume pack and hand Claude the short brief."""
+    from memgraph.brief import build_brief
+    from memgraph.ingest import pack_size
+    from memgraph.pack import PACK_FILE, write_pack
+
     root = project_root(payload["cwd"])
-    if name == "hook-stop":
-        from memgraph import savings, watch
+    graph = _ingest(payload, mem)
+    try:  # the brief points at the pack, so it must show what the brief shows
+        write_pack(graph, mem, pack_size(mem), root)
+    except Exception:
+        log_error(mem)  # the brief still works without a fresh pack; never point at a stale one
+        try:
+            (mem / PACK_FILE).unlink(missing_ok=True)
+        except OSError:
+            pass
+    brief = build_brief(graph, project_root=root, mem_dir=mem)
+    if brief:
+        _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
+        if payload.get("source") in ("startup", "clear"):
+            _log_event(mem, _fresh_start(graph, payload, brief))
 
-        _ingest(payload, mem)
-        watch.arm(mem, Path(payload["transcript_path"]), root, now)
-        try:  # the status line's "saved" figure; cheap unless new events arrived
-            savings.refresh_summary(Path(os.path.dirname(payload["transcript_path"])), mem, watch.ttl_minutes(),
-                                    now)
-        except Exception:
-            log_error(mem)
-    elif name == "hook-session-start":
-        from memgraph.brief import build_brief
-        from memgraph.ingest import pack_size
-        from memgraph.pack import PACK_FILE, write_pack
 
-        graph = _ingest(payload, mem)
-        try:  # the brief points at the pack, so it must show what the brief shows
-            write_pack(graph, mem, pack_size(mem), root)
-        except Exception:
-            log_error(mem)  # the brief still works without a fresh pack; never point at a stale one
-            try:
-                (mem / PACK_FILE).unlink(missing_ok=True)
-            except OSError:
-                pass
-        brief = build_brief(graph, project_root=root, mem_dir=mem)
-        if brief:
-            _emit(stdout, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": brief}})
-            if payload.get("source") in ("startup", "clear"):
-                _log_event(mem, _fresh_start(graph, payload, brief))
-    else:  # hook-prompt
-        from memgraph.guard import GuardConfig, decide, last_activity
-        from memgraph.ingest import save_state
+def _hook_prompt(payload: dict, mem: Path, stdout: TextIO, now: datetime) -> None:
+    """Before a message is sent: the cache guard, else related memory for the first message of a chat."""
+    from memgraph.guard import GuardConfig, decide, last_activity
+    from memgraph.ingest import save_state
 
-        state = load_state(mem / "guard.json")  # own file: never races ingest's state.json
-        state["transcripts_dir"] = os.path.dirname(payload["transcript_path"])
-        last_ts, context = last_activity(Path(payload["transcript_path"]))
-        reason = decide(now, last_ts, context, payload.get("prompt") or "", state, GuardConfig.from_env())
-        save_state(mem / "guard.json", state)
-        if reason:
-            _emit(stdout, {"decision": "block", "reason": reason})
-            _log_event(mem, {"type": "guard_block", "session": payload.get("session_id"), "context": context})
-        else:
-            _related_memory(payload, mem, root, stdout)
+    state = load_state(mem / "guard.json")  # own file: never races ingest's state.json
+    state["transcripts_dir"] = os.path.dirname(payload["transcript_path"])
+    last_ts, context = last_activity(Path(payload["transcript_path"]))
+    reason = decide(now, last_ts, context, payload.get("prompt") or "", state, GuardConfig.from_env())
+    save_state(mem / "guard.json", state)
+    if reason:
+        _emit(stdout, {"decision": "block", "reason": reason})
+        _log_event(mem, {"type": "guard_block", "session": payload.get("session_id"), "context": context})
+    else:
+        _related_memory(payload, mem, project_root(payload["cwd"]), stdout)
+
+
+_HOOK_HANDLERS = {
+    "hook-stop": _hook_stop, "hook-session-start": _hook_session_start, "hook-prompt": _hook_prompt,
+    "hook-pre-read": _hook_pre_read, "hook-post-read": _hook_post_read, "hook-compact": _hook_compact,
+}
 
 
 _CODE_EXTS = frozenset(".py .pyi .js .jsx .mjs .cjs .ts .tsx .mts .cts .go .java .cs .rs .c .h .cc .cpp .cxx "
@@ -465,7 +491,7 @@ USAGE = """Usage: cli <command>
   hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact
 """
 
-HOOKS = ("hook-stop", "hook-session-start", "hook-prompt", "hook-pre-read", "hook-post-read", "hook-compact")
+HOOKS = tuple(_HOOK_HANDLERS)
 
 
 def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = None) -> int:
