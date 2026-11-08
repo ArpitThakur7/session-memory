@@ -1,0 +1,31 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='860' height='340' viewBox='0 0 860 340' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'>
+<rect width='860' height='340' rx='12' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='24' y='36' font-size='18' font-weight='600' fill='#1f2328'>How it works</text>
+<text x='24' y='58' font-size='13' fill='#59636e'>Plain Python reads what Claude Code already saved; no model calls, nothing sent anywhere</text>
+<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto'><path d='M0,0 L10,5 L0,10 z' fill='#59636e'/></marker></defs>
+<rect x='24' y='120' width='190' height='70' rx='10' fill='#f6f8fa' stroke='#d1d9e0'/>
+<text x='119.0' y='149.0' font-size='14' font-weight='600' text-anchor='middle' dominant-baseline='middle' fill='#1f2328'>Claude Code transcripts</text>
+<text x='119.0' y='169.0' font-size='12' text-anchor='middle' fill='#59636e'>files already on your disk</text>
+<line x1='214' y1='155' x2='314' y2='155' stroke='#59636e' stroke-width='1.5' marker-end='url(#a)'/>
+<text x='264.0' y='147' font-size='12' text-anchor='middle' fill='#1a7f37' font-weight='600'>0 tokens</text>
+<rect x='316' y='110' width='200' height='90' rx='10' fill='#ddf4ff' stroke='#d1d9e0'/>
+<text x='416.0' y='149.0' font-size='14' font-weight='600' text-anchor='middle' dominant-baseline='middle' fill='#1f2328'>Memory graph</text>
+<text x='416.0' y='169.0' font-size='12' text-anchor='middle' fill='#59636e'>requests · files · commands</text>
+<text x='416' y='186' font-size='12' text-anchor='middle' fill='#59636e'>errors · decisions</text>
+<rect x='600' y='76' width='236' height='50' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='718.0' y='95.0' font-size='14' font-weight='600' text-anchor='middle' dominant-baseline='middle' fill='#1f2328'>Startup brief</text>
+<text x='718.0' y='115.0' font-size='12' text-anchor='middle' fill='#59636e'>after /clear, ~500–2,000 tokens</text>
+<line x1='516' y1='155' x2='598' y2='101' stroke='#59636e' stroke-width='1.5' marker-end='url(#a)'/>
+<rect x='600' y='138' width='236' height='50' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='718.0' y='157.0' font-size='14' font-weight='600' text-anchor='middle' dominant-baseline='middle' fill='#1f2328'>/recall · explain · path</text>
+<text x='718.0' y='177.0' font-size='12' text-anchor='middle' fill='#59636e'>look things up later</text>
+<line x1='516' y1='155' x2='598' y2='163' stroke='#59636e' stroke-width='1.5' marker-end='url(#a)'/>
+<rect x='600' y='200' width='236' height='50' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='718.0' y='219.0' font-size='14' font-weight='600' text-anchor='middle' dominant-baseline='middle' fill='#1f2328'>Cache guard + watcher</text>
+<text x='718.0' y='239.0' font-size='12' text-anchor='middle' fill='#59636e'>warns before costly resumes</text>
+<line x1='516' y1='155' x2='598' y2='225' stroke='#59636e' stroke-width='1.5' marker-end='url(#a)'/>
+<rect x='600' y='262' width='236' height='50' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='718.0' y='281.0' font-size='14' font-weight='600' text-anchor='middle' dominant-baseline='middle' fill='#1f2328'>3D map · snapshot · stats</text>
+<text x='718.0' y='301.0' font-size='12' text-anchor='middle' fill='#59636e'>see it all</text>
+<line x1='516' y1='155' x2='598' y2='287' stroke='#59636e' stroke-width='1.5' marker-end='url(#a)'/>
+</svg>

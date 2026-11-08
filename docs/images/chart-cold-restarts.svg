@@ -1,0 +1,24 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='860' height='394' viewBox='0 0 860 394' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'>
+<rect width='860' height='394' rx='12' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='24' y='36' font-size='18' font-weight='600' fill='#1f2328'>Coming back to a big chat after its cache expired</text>
+<text x='24' y='58' font-size='13' fill='#59636e'>Tokens re-read at full price, measured from one person's Claude Code transcripts (Nov 2–5, 2026)</text>
+<text x='78' y='102' font-size='13' text-anchor='end' fill='#59636e'>Nov 2</text>
+<rect x='90' y='84' width='257' height='26' rx='4' fill='#d1242f'/>
+<text x='355' y='102' font-size='13' fill='#1f2328'>399,849 tokens · $3.20</text>
+<text x='78' y='146' font-size='13' text-anchor='end' fill='#59636e'>Nov 2</text>
+<rect x='90' y='128' width='359' height='26' rx='4' fill='#d1242f'/>
+<text x='457' y='146' font-size='13' fill='#1f2328'>558,717 tokens · $4.47</text>
+<text x='78' y='190' font-size='13' text-anchor='end' fill='#59636e'>Nov 3</text>
+<rect x='90' y='172' width='448' height='26' rx='4' fill='#d1242f'/>
+<text x='546' y='190' font-size='13' fill='#1f2328'>697,854 tokens · $5.58</text>
+<text x='78' y='234' font-size='13' text-anchor='end' fill='#59636e'>Nov 4</text>
+<rect x='90' y='216' width='499' height='26' rx='4' fill='#d1242f'/>
+<text x='597' y='234' font-size='13' fill='#1f2328'>777,486 tokens · $6.22</text>
+<text x='78' y='278' font-size='13' text-anchor='end' fill='#59636e'>Nov 5</text>
+<rect x='90' y='260' width='540' height='26' rx='4' fill='#d1242f'/>
+<text x='638' y='278' font-size='13' fill='#1f2328'>840,843 tokens · $6.73</text>
+<rect x='90' y='310' width='3' height='26' rx='1' fill='#1a7f37'/>
+<text x='78' y='328' font-size='13' text-anchor='end' fill='#59636e'>/clear</text>
+<text x='102' y='328' font-size='13' fill='#1a7f37' font-weight='600'>about 538 tokens each time with the memory brief</text>
+<text x='24' y='372' font-size='13' fill='#1f2328'>Five returns cost 3,274,749 tokens ($26.20). Five fresh starts would have cost about 2,690 tokens.</text>
+</svg>

@@ -1,0 +1,6 @@
+Path (2 hops):
+[task] add login with email and password
+  —ran→ (extracted)
+[command] npm run build
+  —failed→ (extracted)
+[error] TS2322 in src/api/auth.ts: Type 'string' is not assignable to type 'User'

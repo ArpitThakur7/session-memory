@@ -2,3 +2,4 @@ __pycache__/
 .pytest_cache/
 .claude/session-memory/
 .superpowers/
+docs/images/_map/

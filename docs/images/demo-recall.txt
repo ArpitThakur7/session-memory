@@ -1,0 +1,5 @@
+[task] make search ignore upper and lower case (last 2026-11-03, extracted)
+[task] add a search box to the recipe list page (last 2026-11-03, extracted)
+[error] FAIL src/components/SearchBox.tsx: expected 3 results, got 0 (last 2026-11-03, extracted)
+[file] src/components/SearchBox.tsx (last 2026-11-03, extracted)
+[command] npm test -- SearchBox (last 2026-11-03, extracted)

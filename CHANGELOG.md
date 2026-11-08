@@ -29,6 +29,8 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 
 ### Changed
 
+- README rewritten: install in 3 steps, everyday use, real measured numbers as charts, and example output and pictures from a made-up demo project (`docs/demo/make_demo.py`, `docs/demo/make_charts.py`). The live-test checklist moved to `docs/LIVE_TEST.md`.
+- Readability pass with no behaviour change: one handler per event kind in the graph, one per hook in the CLI and one per MCP tool; shared helpers for atomic file writes and error logging; unused code removed.
 - Hooks keep one memory folder per project: they use `CLAUDE_PROJECT_DIR` when Claude Code sets it, so a chat that moved into a subfolder no longer creates a second `.claude/session-memory` there.
 - `usage`, `savings`, `audit` and the map ignore a recorded transcripts folder that no longer exists and fall back to `CLAUDE_CONFIG_DIR/projects/<slug>` (or `~/.claude/projects/<slug>`).
 - The Stop hook refreshes the status line's `summary.json` only when a new `fresh_start` event was logged, not on every read, steer or guard event.
