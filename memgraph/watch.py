@@ -19,7 +19,7 @@ from memgraph.graph import Graph, write_json_atomic
 from memgraph.guard import last_activity
 from memgraph.ingest import load_state, pack_size
 from memgraph.pack import write_pack
-from memgraph.transcript import parse_ts
+from memgraph.transcript import as_utc, parse_ts
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
 WATCH_FILE = "watch.json"
@@ -70,10 +70,6 @@ def deadline(last_reply: datetime, ttl: int) -> datetime:
 def warn_lead_minutes(ttl: int) -> int:
     """How long before the deadline to warn: min(10, ttl // 2) minutes, at least 1."""
     return max(1, min(MAX_LEAD_MINUTES, ttl // 2))
-
-
-def _utc(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def pid_alive(pid: int) -> bool:
@@ -191,7 +187,7 @@ def arm(mem_dir: Path, transcript_path: Path, project: Path, now: datetime, spaw
     if last is None:
         return
     ttl = ttl_minutes()
-    dl = deadline(_utc(last), ttl)
+    dl = deadline(as_utc(last), ttl)
     data = {"deadline": dl.isoformat(), "warn_min": warn_lead_minutes(ttl),
             "transcript": str(transcript_path), "project": str(project)}
     notified_for = load_state(mem_dir / WATCH_FILE).get("notified_for")
@@ -224,7 +220,7 @@ def _pending(mem_dir: Path) -> tuple[str, datetime, int] | None:
     lead = data.get("warn_min")
     if not isinstance(lead, int) or isinstance(lead, bool) or not 1 <= lead <= MAX_LEAD_MINUTES:
         lead = MAX_LEAD_MINUTES
-    return text, _utc(dl), lead
+    return text, as_utc(dl), lead
 
 
 def _extend_for_activity(mem_dir: Path, deadline_text: str, dl: datetime) -> bool:
@@ -241,7 +237,7 @@ def _extend_for_activity(mem_dir: Path, deadline_text: str, dl: datetime) -> boo
         last, _context = last_activity(Path(transcript))
         if last is None:
             return False
-        newer = deadline(_utc(last), ttl_minutes())
+        newer = deadline(as_utc(last), ttl_minutes())
         if newer <= dl:
             return False
         data["deadline"] = newer.isoformat()

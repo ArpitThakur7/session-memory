@@ -5,10 +5,10 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from memgraph.transcript import is_synthetic, parse_line, parse_ts
+from memgraph.transcript import as_utc, is_synthetic, parse_line, parse_ts
 
 _TAIL_BYTES = 256 * 1024
 
@@ -96,21 +96,12 @@ def last_activity(transcript_path: Path) -> tuple[datetime | None, int | None]:
     context: int | None = None
     for line in lines:
         try:
-            obj = json.loads(line)
-            if not isinstance(obj, dict):
-                continue
-            kind = obj.get("type")
-            if kind == "system" and obj.get("subtype") == "compact_boundary":
-                ts, compacted, line_context = parse_ts(obj.get("timestamp")), True, None
-            elif kind == "assistant" and not is_synthetic(obj):
-                ts, compacted, line_context = parse_ts(obj.get("timestamp")), False, None
-                for ev in parse_line(line):
-                    if ev.kind == "usage" and isinstance(ev.data.get("context"), int):
-                        line_context = ev.data["context"]
-            else:
-                continue
+            activity = _activity(line)
         except Exception:
             continue
+        if activity is None:
+            continue
+        ts, compacted, line_context = activity
         if ts is not None and (newest is None or ts > newest):
             newest = ts
         if compacted:
@@ -118,6 +109,23 @@ def last_activity(transcript_path: Path) -> tuple[datetime | None, int | None]:
         elif line_context is not None:
             context = line_context
     return newest, context
+
+
+def _activity(line: str) -> tuple[datetime | None, bool, int | None] | None:
+    """(time, is it a compaction, context size) for a reply or compaction line; None for other lines."""
+    obj = json.loads(line)
+    if not isinstance(obj, dict):
+        return None
+    kind = obj.get("type")
+    if kind == "system" and obj.get("subtype") == "compact_boundary":
+        return parse_ts(obj.get("timestamp")), True, None
+    if kind != "assistant" or is_synthetic(obj):
+        return None
+    context = None
+    for event in parse_line(line):
+        if event.kind == "usage" and isinstance(event.data.get("context"), int):
+            context = event.data["context"]
+    return parse_ts(obj.get("timestamp")), False, context
 
 
 def has_reply(transcript_path: Path) -> bool:
@@ -138,10 +146,6 @@ def has_reply(transcript_path: Path) -> bool:
     return False
 
 
-def _utc(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
 def decide(
     now: datetime,
     last_ts: datetime | None,
@@ -155,7 +159,7 @@ def decide(
         return None
     if _is_free_command(prompt) or prompt.lstrip().startswith("<"):
         return None  # built-in commands that skip the model; task notifications, agent reports, cross-session messages
-    now, last_ts = _utc(now), _utc(last_ts)
+    now, last_ts = as_utc(now), as_utc(last_ts)
     idle = now - last_ts
     if idle <= timedelta(minutes=cfg.idle_minutes) or context <= cfg.min_tokens:
         return None

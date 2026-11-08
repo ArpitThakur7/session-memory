@@ -197,7 +197,8 @@ def _mark_steered(entry: dict, key: str) -> None:
         del steered[:-MAX_PATHS]
 
 
-def _current(rec, st, epoch: int) -> bool:
+def _unchanged_since_read(rec, st, epoch: int) -> bool:
+    """True when the recorded read is of this exact file version, since the last compaction."""
     return (isinstance(rec, dict) and rec.get("mtime_ns") == st.st_mtime_ns and rec.get("size") == st.st_size
             and rec.get("compact_epoch") == epoch)
 
@@ -208,6 +209,22 @@ def _retry(rec: dict, start: int, end: int, t: float) -> bool:
     return (isinstance(denied, list) and len(denied) == 3 and denied[:2] == [start, end]
             and isinstance(denied[2], (int, float)) and not isinstance(denied[2], bool)
             and 0 <= t - denied[2] <= RETRY_SECONDS)
+
+
+def _mark_denied(rec: dict, start: int, end: int, t: float, by: str) -> None:
+    """Remember a denial, so the same read within RETRY_SECONDS is let through."""
+    rec["denied"] = [start, end, t]
+    rec["denied_by"] = by
+
+
+def _drop_oldest(files: dict) -> None:
+    """Keep the MAX_PATHS most recently read files of a chat."""
+    def last_read(key):
+        ranges = _ranges(files[key].get("ranges")) if isinstance(files[key], dict) else []
+        return max((r[2] for r in ranges), default=0)
+
+    for stale in sorted(files, key=last_read)[:max(0, len(files) - MAX_PATHS)]:
+        del files[stale]
 
 
 def deny_once(payload: dict, mem: Path, now: datetime, lines: int | None = None) -> bool:
@@ -230,8 +247,7 @@ def deny_once(payload: dict, mem: Path, now: datetime, lines: int | None = None)
         return False
     if key in _steered(entry):
         return False
-    rec["denied"] = [start, end, t]
-    rec["denied_by"] = "steer"
+    _mark_denied(rec, start, end, t, "steer")
     _mark_steered(entry, key)
     entry["seen"] = t
     _prune(state)
@@ -248,7 +264,7 @@ def check(payload: dict, mem: Path, now: datetime) -> str | None:
     state = load_state(mem / READS_FILE)
     entry, files = _scope_files(state, scope)
     rec = files.get(key)
-    if not _current(rec, st, _epoch(state, scope)):
+    if not _unchanged_since_read(rec, st, _epoch(state, scope)):
         return None
     t = now.timestamp()
     at = _covered_at(start, end, _ranges(rec.get("ranges")), t - FRESH_SECONDS)
@@ -258,8 +274,7 @@ def check(payload: dict, mem: Path, now: datetime) -> str | None:
         if rec.get("denied_by", "guard") == "guard":
             _log_retry(mem, payload, "guard")
         return None  # asked again right after a denial: let it through (PostToolUse records it)
-    rec["denied"] = [start, end, t]
-    rec["denied_by"] = "guard"
+    _mark_denied(rec, start, end, t, "guard")
     entry["seen"] = t
     _save(mem, state)
     return REASON.format(file=file_path, at=_clock(at))
@@ -276,19 +291,14 @@ def record(payload: dict, mem: Path, now: datetime) -> None:
     epoch = _epoch(state, scope)
     entry, files = _scope_files(state, scope)
     rec = files.get(key)
-    old = _ranges(rec.get("ranges")) if _current(rec, st, epoch) else []
+    old = _ranges(rec.get("ranges")) if _unchanged_since_read(rec, st, epoch) else []
     ranges = [r for r in old if r[2] >= t - FRESH_SECONDS and r[:2] != [start, end]] + [[start, end, t]]
     files[key] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size, "ranges": ranges[-MAX_RANGES:],
                   "compact_epoch": epoch}
     tool_input = payload["tool_input"]
     if tool_input.get("offset") is None and tool_input.get("limit") is None:
         _mark_steered(entry, key)  # the whole file is in the chat: an outline would only repeat it
-    if len(files) > MAX_PATHS:
-        def last(k):
-            rs = _ranges(files[k].get("ranges")) if isinstance(files[k], dict) else []
-            return max((r[2] for r in rs), default=0)
-        for stale in sorted(files, key=last)[:len(files) - MAX_PATHS]:
-            del files[stale]
+    _drop_oldest(files)
     entry["seen"] = t
     _prune(state)
     _save(mem, state)

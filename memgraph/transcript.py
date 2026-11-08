@@ -37,6 +37,11 @@ def parse_ts(value) -> datetime | None:
     return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
+def as_utc(dt: datetime) -> datetime:
+    """`dt` with UTC attached when it has no zone (stored times without a zone are UTC)."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 _LOCAL_TZ = None  # zone for displayed times; None means the machine's own zone
 
 
@@ -45,11 +50,7 @@ def local_time(value) -> datetime | None:
 
     Stored timestamps stay UTC; every time shown to a person goes through here."""
     ts = value if isinstance(value, datetime) else parse_ts(value)
-    if ts is None:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(_LOCAL_TZ)
+    return None if ts is None else as_utc(ts).astimezone(_LOCAL_TZ)
 
 
 def fmt_local(value, fmt: str = "%Y-%m-%d %H:%M") -> str:
