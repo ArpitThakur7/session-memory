@@ -12,10 +12,11 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
+
+from memgraph.store import write_text_atomic
 
 REPO = Path(__file__).resolve().parent.parent
 NAME = "session-memory"
@@ -75,19 +76,7 @@ def _load(path: Path, key: str) -> dict:
 
 
 def _write_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(data, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def merge_server(path: Path, key: str, entry: dict, dry_run: bool, out: TextIO) -> int:

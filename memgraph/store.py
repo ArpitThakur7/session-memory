@@ -4,6 +4,7 @@ Kept free of other memgraph imports so fast hooks (read guard, status line) star
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -57,14 +58,16 @@ def load_state(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def write_json_atomic(path: Path, obj) -> None:
-    """Write `obj` as JSON to `path` atomically: unique temp file beside it, then os.replace."""
+@contextlib.contextmanager
+def atomic_file(path: Path):
+    """Yield a temp file path beside `path`. When the block finishes it replaces `path` in one
+    step, so readers never see half a file; when the block fails it is deleted instead."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    os.close(fd)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh, ensure_ascii=False)
+        yield tmp
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -72,6 +75,17 @@ def write_json_atomic(path: Path, obj) -> None:
         except OSError:
             pass
         raise
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write `text` as UTF-8 with \n line ends to `path` atomically (see atomic_file)."""
+    with atomic_file(path) as tmp:
+        Path(tmp).write_text(text, encoding="utf-8", newline="\n")
+
+
+def write_json_atomic(path: Path, obj) -> None:
+    """Write `obj` as compact JSON to `path` atomically (see atomic_file)."""
+    write_text_atomic(path, json.dumps(obj, ensure_ascii=False))
 
 
 def append_event(mem_dir: Path, event: dict) -> None:

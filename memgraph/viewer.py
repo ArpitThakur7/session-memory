@@ -4,14 +4,13 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from memgraph.brief import display_path, where_things_stand
 from memgraph.graph import Graph, edge_conf
 from memgraph.pack import PACK_FILE
+from memgraph.store import write_text_atomic
 from memgraph.visual import IMAGE_FILE, IMAGE_SIZE, has_story, render_visual_pack
 
 TEMPLATE_PATH = Path(__file__).with_name("viewer_template.html")
@@ -139,15 +138,5 @@ def write_map(graph: Graph, mem_dir: Path, project_name: str, project_root: Path
     pack_path = (display_path(str(pack), project_root) or str(pack)) if pack.is_file() else ""
     snapshot = snapshot_view(graph, Path(mem_dir), project_root)
     html = render_map(graph, project_name, project_root, tokens, pack_path, snapshot)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(html)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    write_text_atomic(path, html)
     return path

@@ -8,9 +8,7 @@ imported lazily; without it `render_visual_pack` returns None.
 """
 from __future__ import annotations
 
-import os
 import re
-import tempfile
 from itertools import islice
 from pathlib import Path
 
@@ -18,6 +16,7 @@ from memgraph.brief import DATA_NOTE, _newest, _one_line
 from memgraph.graph import Graph
 from memgraph.pack import built_line
 from memgraph.relevance import is_project_file, project_errors
+from memgraph.store import atomic_file
 from memgraph.transcript import clean_prompt, fmt_local
 
 IMAGE_SIZE = (1092, 1092)
@@ -325,15 +324,6 @@ def render_visual_pack(graph: Graph, path: Path, project_root: Path | None = Non
     d.text((_MARGIN, h - _FOOT + 6), page["footer"], font=body, fill=_MUTED)
 
     path = Path(path)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    os.close(fd)
-    try:
+    with atomic_file(path) as tmp:
         img.save(tmp, "PNG")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
     return path

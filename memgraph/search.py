@@ -107,17 +107,13 @@ def _documents(graph, root: Path | None) -> list[tuple[dict, str]]:
     return docs
 
 
-def search(graph, prompt: str, root: Path | None = None, limit: int = MAX_HITS) -> list[tuple[dict, str, float]]:
-    """Top (node, shown label, score) for the prompt, best first; empty when nothing clears MIN_SCORE."""
-    query = sorted(set(tokenize(prompt)))
-    if not query:
-        return []
-    docs = _documents(graph, root)
-    if not docs:
-        return []
-    qset = set(query)
+def _bm25(docs: list[tuple[dict, str]], query: set[str]) -> list[tuple[float, int]]:
+    """Per document: (BM25 score for the query words, how many query words count as a match).
+
+    Generic words (exit, code, file, ...) still add to an error's score but are not counted
+    as matches, so an error needs real overlap with the question to be shown."""
     tfs, df, total = [], {}, 0
-    for node, shown in docs:
+    for _node, shown in docs:
         toks = tokenize(shown)
         total += len(toks)
         tf = {}
@@ -128,17 +124,31 @@ def search(graph, prompt: str, root: Path | None = None, limit: int = MAX_HITS) 
         tfs.append((tf, len(toks)))
     n = len(docs)
     avg = (total / n) or 1.0
-    scored = []
-    for (node, shown), (tf, dl) in zip(docs, tfs):
+    out = []
+    for (node, _shown), (tf, length) in zip(docs, tfs):
         score, matched = 0.0, 0
-        for t in qset:
+        for t in query:
             f = tf.get(t)
             if not f:
                 continue
             if node.get("kind") != "error" or t not in _GENERIC_ERROR_TERMS:
                 matched += 1
             idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
-            score += idf * f * (K1 + 1) / (f + K1 * (1 - B + B * dl / avg))
+            score += idf * f * (K1 + 1) / (f + K1 * (1 - B + B * length / avg))
+        out.append((score, matched))
+    return out
+
+
+def search(graph, prompt: str, root: Path | None = None, limit: int = MAX_HITS) -> list[tuple[dict, str, float]]:
+    """Top (node, shown label, score) for the prompt, best first; empty when nothing clears MIN_SCORE."""
+    query = sorted(set(tokenize(prompt)))
+    if not query:
+        return []
+    docs = _documents(graph, root)
+    if not docs:
+        return []
+    scored = []
+    for (node, shown), (score, matched) in zip(docs, _bm25(docs, set(query))):
         score *= WEIGHTS.get(node.get("kind"), 1.0)
         if score >= MIN_SCORE and (node.get("kind") != "error" or matched >= MIN_ERROR_TERMS):
             scored.append((node, shown, score))
@@ -186,7 +196,6 @@ def related_memory(graph, prompt: str, root: Path | None = None) -> tuple[str, i
 # ---- /recall: one word looked up on purpose ------------------------------------------
 
 RECALL_KIND_WEIGHTS = {"decision": 5.0, "task": 4.0, "error": 3.0, "file": 2.0, "command": 1.0}
-RECALL_KINDS = tuple(RECALL_KIND_WEIGHTS)
 MAX_RECALL_COMMANDS = 3   # command groups shown at most; commands are the noisiest kind
 SUBSTRING_ONLY = 0.7      # a label that only contains the word inside another word
 _QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")

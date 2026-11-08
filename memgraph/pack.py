@@ -1,15 +1,14 @@
 """Text resume pack: a bounded markdown summary of the memory graph, written at 0 model tokens."""
 from __future__ import annotations
 
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from memgraph.relevance import project_errors
-from memgraph.brief import (DATA_NOTE, _changed_files, _fmt_ts, _newest, _one_line, _request_line,
-                            where_things_stand)
+from memgraph.brief import (DATA_NOTE, _changed_files, _last_request, _newest, _next_steps, _of_kind, _one_line,
+                            _request_line, where_things_stand)
 from memgraph.graph import Graph
+from memgraph.relevance import project_errors
+from memgraph.store import write_text_atomic
 from memgraph.transcript import clean_prompt, fmt_local, local_time
 
 SIZES = {"tiny": 2000, "standard": 8000, "deep": 24000}
@@ -18,7 +17,6 @@ BUILT_PREFIX = "Built "
 
 # (todos, decisions, files, errors) shown per size before trimming to the cap.
 _LIMITS = {"tiny": (5, 5, 8, 3), "standard": (10, 10, 15, 5), "deep": (20, 20, 40, 10)}
-_MAX_TODO_TEXT = 200
 _MAX_LINE = 300
 
 
@@ -76,33 +74,23 @@ def build_pack(graph: Graph, size: str = "standard", project_root: Path | None =
     if size not in SIZES:
         raise ValueError(f"unknown size {size!r}; expected one of {', '.join(SIZES)}")
     cap = SIZES[size]
-    nodes = list(graph.nodes.values())
-    by_kind = lambda kind: [n for n in nodes if n.get("kind") == kind]  # noqa: E731
     last_prompt = graph.meta.get("last_prompt")
-    if not last_prompt and not any(by_kind(k) for k in ("decision", "file", "error", "task")):
+    if not last_prompt and not any(_of_kind(graph, k) for k in ("decision", "file", "error", "task")):
         return ""
     n_todo, n_dec, n_files, n_err = _LIMITS[size]
 
-    todos = (graph.meta.get("last_todos") or {}).get("items") or []
-    stamp = _fmt_ts((graph.meta.get("last_todos") or {}).get("ts"))
+    errors = project_errors(graph, _of_kind(graph, "error"), project_root)
     sections: list[tuple[str, list[str]]] = [
-        (f"## Next steps (as of {stamp})" if stamp else "## Next steps",
-         [f"- [{_one_line(t.get('status', ''))}] {_one_line(t.get('content', ''))[:_MAX_TODO_TEXT]}"
-          for t in todos if isinstance(t, dict) and t.get("status") != "completed"][:n_todo]),
-        ("## Decisions", [f"- {_clip(n.get('label', ''))}" for n in _newest(by_kind("decision"), n_dec)]),
-        ("## Changed files", [l for l in _changed_files(graph, by_kind("file"), project_root)][:n_files]),
-        ("## Recent errors", [f"- {_clip(n.get('label', ''))}" for n in _newest(project_errors(graph, by_kind("error"), project_root), n_err)]),
+        _next_steps(graph, n_todo),
+        ("## Decisions", [f"- {_clip(n.get('label', ''))}" for n in _newest(_of_kind(graph, "decision"), n_dec)]),
+        ("## Changed files", _changed_files(graph, _of_kind(graph, "file"), project_root)[:n_files]),
+        ("## Recent errors", [f"- {_clip(n.get('label', ''))}" for n in _newest(errors, n_err)]),
     ]
     if size != "tiny":
         sections.append(("## Timeline", _timeline(graph, size == "deep")))
 
-    session_title = request_text = None
+    session_title, request_text = _last_request(graph)
     reply_text = where_things_stand(graph)
-    if last_prompt:
-        sid = last_prompt.get("session")
-        title = ((graph.meta.get("sessions") or {}).get(sid) or {}).get("title")
-        session_title = _one_line(title) if title else None
-        request_text = _one_line(clean_prompt(last_prompt.get("text", "")))
 
     name = project_root.name if project_root is not None and project_root.name else "project"
     built = built_line(now)
@@ -161,15 +149,5 @@ def write_pack(graph: Graph, mem_dir: Path, size: str = "standard", project_root
             return path
     except (OSError, ValueError):
         pass  # missing or unreadable: write it
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    write_text_atomic(path, text)
     return path

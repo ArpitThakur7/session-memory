@@ -39,6 +39,28 @@ def _newest(nodes, limit: int | None = None) -> list[dict]:
     return ordered if limit is None else ordered[:limit]
 
 
+def _of_kind(graph: Graph, kind: str) -> list[dict]:
+    return [n for n in graph.nodes.values() if n.get("kind") == kind]
+
+
+def _next_steps(graph: Graph, limit: int) -> tuple[str, list[str]]:
+    """The "Next steps" heading (with when the list was written) and the unfinished todo lines."""
+    last_todos = graph.meta.get("last_todos") or {}
+    stamp = _fmt_ts(last_todos.get("ts"))
+    lines = [f"- [{_one_line(t.get('status', ''))}] {_one_line(t.get('content', ''))[:_MAX_TODO_TEXT]}"
+             for t in last_todos.get("items") or [] if isinstance(t, dict) and t.get("status") != "completed"]
+    return (f"## Next steps (as of {stamp})" if stamp else "## Next steps"), lines[:limit]
+
+
+def _last_request(graph: Graph) -> tuple[str | None, str | None]:
+    """(title of the chat it was asked in, the request as one clean line); Nones when there is none."""
+    last_prompt = graph.meta.get("last_prompt")
+    if not last_prompt:
+        return None, None
+    title = ((graph.meta.get("sessions") or {}).get(last_prompt.get("session")) or {}).get("title")
+    return (_one_line(title) if title else None), _one_line(clean_prompt(last_prompt.get("text", "")))
+
+
 def _request_line(last_prompt: dict, text: str) -> str:
     stamp = _fmt_ts(last_prompt.get("ts"))
     return f"Last request ({stamp}): {text}" if stamp else f"Last request: {text}"
@@ -171,41 +193,27 @@ def build_brief(graph: Graph, budget_chars: int = DEFAULT_BUDGET, project_root: 
     existing resume-pack.md (and a memory.png at least as new) are added before
     the footer. `footer` is the closing line (MCP_FOOTER for MCP clients).
     """
-    nodes = list(graph.nodes.values())
-    by_kind = lambda kind: [n for n in nodes if n.get("kind") == kind]  # noqa: E731
     last_prompt = graph.meta.get("last_prompt")
-    if not last_prompt and not any(by_kind(k) for k in ("decision", "file", "error")):
+    if not last_prompt and not any(_of_kind(graph, k) for k in ("decision", "file", "error")):
         return ""
 
     # Section bodies, highest priority first: (heading, item lines).
-    last_todos = graph.meta.get("last_todos") or {}
-    todos = last_todos.get("items") or []
-    todo_stamp = _fmt_ts(last_todos.get("ts"))
-    next_steps = [f"- [{_one_line(t.get('status', ''))}] {_one_line(t.get('content', ''))[:_MAX_TODO_TEXT]}"
-                  for t in todos if isinstance(t, dict) and t.get("status") != "completed"][:_MAX_TODOS]
     decisions = [f"- {_one_line(n.get('label', ''))}"
-                 for n in _newest(by_kind("decision"), _MAX_DECISIONS)]
-    files = _changed_files(graph, by_kind("file"), project_root)
+                 for n in _newest(_of_kind(graph, "decision"), _MAX_DECISIONS)]
+    files = _changed_files(graph, _of_kind(graph, "file"), project_root)
     errors = [f"- {_one_line(n.get('label', ''))}{_error_link(graph, n, project_root)}"
-              for n in _newest(project_errors(graph, by_kind("error"), project_root), _MAX_ERRORS)]
+              for n in _newest(project_errors(graph, _of_kind(graph, "error"), project_root), _MAX_ERRORS)]
     sections = [
-        (f"## Next steps (as of {todo_stamp})" if todo_stamp else "## Next steps", next_steps),
+        _next_steps(graph, _MAX_TODOS),
         ("## Decisions", decisions),
         ("## Recently changed files", files),
         ("## Recent errors", errors),
     ]
 
     # Section 1: what the user was doing.
-    session_title = request_text = None
-    earlier: list[str] = []
-    reply_text = ""
-    if last_prompt:
-        sid = last_prompt.get("session")
-        title = ((graph.meta.get("sessions") or {}).get(sid) or {}).get("title")
-        session_title = _one_line(title) if title else None
-        request_text = _one_line(clean_prompt(last_prompt.get("text", "")))
-        earlier = _earlier_requests(graph, last_prompt)
-        reply_text = where_things_stand(graph)
+    session_title, request_text = _last_request(graph)
+    earlier = _earlier_requests(graph, last_prompt) if last_prompt else []
+    reply_text = where_things_stand(graph) if last_prompt else ""
 
     pointers = _pack_pointers(mem_dir)
 
