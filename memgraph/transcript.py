@@ -60,6 +60,7 @@ def fmt_local(value, fmt: str = "%Y-%m-%d %H:%M") -> str:
 
 @dataclass(frozen=True)
 class Event:
+    """One thing that happened in a chat, as read from a transcript line."""
     kind: str  # prompt | edit | read | command | error | todo | todo_delta | usage | reply | title
     ts: str
     session: str
@@ -142,16 +143,22 @@ def _tool_use_event(block: dict, ts: str, session: str) -> Event | None:
     if name == _PLAN_TOOL and isinstance(inp.get("items"), list):
         return Event("todo", ts, session, {"items": _todo_items(inp["items"])})
     if name == _PLAN_TOOL:
-        return Event("todo_delta", ts, session, {
-            "advance": inp.get("advance") is True,
-            "done": [n for n in inp.get("done") or [] if _is_int(n)] if isinstance(inp.get("done"), list) else [],
-            "start": inp.get("start") if _is_int(inp.get("start")) else None,
-            "complete_all": False,
-        })
+        return Event("todo_delta", ts, session, _plan_delta(inp))
     if name == _WRAP_UP_TOOL:  # closes the turn: every step of the plan is done
         return Event("todo_delta", ts, session,
                      {"advance": False, "done": [], "start": None, "complete_all": True})
     return None
+
+
+def _plan_delta(inp: dict) -> dict:
+    """A plan update that changes step states (advance / done / start) instead of listing the steps."""
+    done = inp.get("done") if isinstance(inp.get("done"), list) else []
+    return {
+        "advance": inp.get("advance") is True,
+        "done": [n for n in done if _is_int(n)],
+        "start": inp.get("start") if _is_int(inp.get("start")) else None,
+        "complete_all": False,
+    }
 
 
 def _is_int(value) -> bool:

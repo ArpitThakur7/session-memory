@@ -6,9 +6,9 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -92,6 +92,18 @@ def node_confs(graph) -> dict[str, str]:
 
 def _digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+@dataclass
+class _Turn:
+    """What every event handler needs: the event's time and data, and its chat's nodes."""
+    ts: str
+    stamp: str          # ts, or "" when the event has no time
+    sid: str
+    data: dict
+    session: dict       # meta["sessions"][sid]
+    session_node: str
+    current: str        # the request this work belongs to (or the chat's node)
 
 
 LOCK_TIMEOUT = 2.0  # seconds a writer waits for graph.lock before giving up
@@ -228,74 +240,95 @@ class Graph:
                 edge["last"] = ts
 
     def apply(self, event: Event) -> None:
-        ts = event.ts
-        sid = event.session or "unknown"
+        """Add one transcript event to the graph (and to the session's bookkeeping in meta)."""
         data = event.data or {}
-        stamp = ts or ""
         if event.kind == "error" and data.get("tool_use_id") not in self.meta.get("tool_nodes", {}):
             return  # only failures of edit/read/command tools are the project's own errors
 
-        sess = self.meta.setdefault("sessions", {}).setdefault(sid, {})
-        if ts:
-            sess.setdefault("first", ts)
-            sess["last"] = ts
-        session_node = self.add_node("session", sid, sid, stamp)
-        current = self.meta.get("current_task", {}).get(sid) or session_node
+        sid = event.session or "unknown"
+        session = self.meta.setdefault("sessions", {}).setdefault(sid, {})
+        if event.ts:
+            session.setdefault("first", event.ts)
+            session["last"] = event.ts
+        session_node = self.add_node("session", sid, sid, event.ts or "")
+        turn = _Turn(
+            ts=event.ts, stamp=event.ts or "", sid=sid, data=data, session=session,
+            session_node=session_node,
+            # work (edits, commands, ...) hangs off the request it answers, or the chat when there is none yet
+            current=self.meta.get("current_task", {}).get(sid) or session_node,
+        )
+        handler = self._HANDLERS.get(event.kind)
+        if handler is not None:
+            handler(self, turn, event.kind)
 
-        kind = event.kind
-        if kind == "prompt":
-            text = str(data.get("text") or "")
-            task = self.add_node("task", _digest(text), text[:_MAX_LABEL], stamp)
-            self.add_edge(session_node, "asked", task, stamp)
-            self.meta.setdefault("current_task", {})[sid] = task
-            entry = {"text": text, "ts": ts, "session": sid}
-            if _is_newer(ts, self.meta.get("last_prompt")):
-                self.meta["last_prompt"] = dict(entry)
-            self._remember_prompt(entry)
-        elif kind == "reply":
-            text = str(data.get("text") or "")
-            if text and _is_newer(ts, self.meta.get("last_reply")):
-                self.meta["last_reply"] = {"text": text, "ts": ts, "session": sid}
-        elif kind == "title":
-            text = str(data.get("text") or "")
-            # A title the user set (/rename) wins over Claude Code's generated one.
-            if text and (data.get("source") == "custom" or sess.get("title_source") != "custom"):
-                sess["title"] = text
-                sess["title_source"] = data.get("source")
-        elif kind in ("edit", "read"):
-            path = data.get("path")
-            if path:
-                path = str(path).replace("\\", "/")
-                node = self.add_node("file", path, path, stamp)
-                self.add_edge(current, "edited" if kind == "edit" else "read", node, stamp)
-                self._remember_tool(data.get("id"), node)
-        elif kind == "command":
-            cmd = str(data.get("cmd") or "")
-            node = self.add_node("command", _digest(cmd), cmd[:_MAX_LABEL], stamp)
-            self.add_edge(current, "ran", node, stamp)
-            self._remember_tool(data.get("id"), node)
-        elif kind == "error":
-            text = str(data.get("text") or "")
-            node = self.add_node("error", _digest(text), text[:_MAX_LABEL], stamp)
-            src = self.meta["tool_nodes"][data["tool_use_id"]]
-            self.add_edge(src, "failed", node, stamp)
-            self._link_mentions(node, text, src, stamp)
-        elif kind == "todo":
-            items = [dict(t) for t in data.get("items") or [] if isinstance(t, dict)]
-            self.meta.setdefault("todos", {})[sid] = items
-            if _is_newer(ts, self.meta.get("last_todos")):
-                # A separate copy, so a later delta is applied to each list exactly once.
-                self.meta["last_todos"] = {"session": sid, "ts": ts, "items": [dict(t) for t in items]}
-        elif kind == "todo_delta":
-            _apply_todo_delta(self.meta.get("todos", {}).get(sid), data)
-            last = self.meta.get("last_todos")
-            if isinstance(last, dict) and last.get("session") == sid:
-                _apply_todo_delta(last.get("items"), data)
-                if _is_newer(ts, last):
-                    last["ts"] = ts
-        elif kind == "usage":
-            if isinstance(data.get("context"), int):
-                sess["context"] = data["context"]
+    def _on_prompt(self, t: "_Turn", _kind: str) -> None:
+        text = str(t.data.get("text") or "")
+        task = self.add_node("task", _digest(text), text[:_MAX_LABEL], t.stamp)
+        self.add_edge(t.session_node, "asked", task, t.stamp)
+        self.meta.setdefault("current_task", {})[t.sid] = task
+        entry = {"text": text, "ts": t.ts, "session": t.sid}
+        if _is_newer(t.ts, self.meta.get("last_prompt")):
+            self.meta["last_prompt"] = dict(entry)
+        self._remember_prompt(entry)
+
+    def _on_reply(self, t: "_Turn", _kind: str) -> None:
+        text = str(t.data.get("text") or "")
+        if text and _is_newer(t.ts, self.meta.get("last_reply")):
+            self.meta["last_reply"] = {"text": text, "ts": t.ts, "session": t.sid}
+
+    def _on_title(self, t: "_Turn", _kind: str) -> None:
+        text = str(t.data.get("text") or "")
+        # A title the user set (/rename) wins over Claude Code's generated one.
+        if text and (t.data.get("source") == "custom" or t.session.get("title_source") != "custom"):
+            t.session["title"] = text
+            t.session["title_source"] = t.data.get("source")
+
+    def _on_file(self, t: "_Turn", kind: str) -> None:
+        path = t.data.get("path")
+        if not path:
+            return
+        path = str(path).replace("\\", "/")
+        node = self.add_node("file", path, path, t.stamp)
+        self.add_edge(t.current, "edited" if kind == "edit" else "read", node, t.stamp)
+        self._remember_tool(t.data.get("id"), node)
+
+    def _on_command(self, t: "_Turn", _kind: str) -> None:
+        cmd = str(t.data.get("cmd") or "")
+        node = self.add_node("command", _digest(cmd), cmd[:_MAX_LABEL], t.stamp)
+        self.add_edge(t.current, "ran", node, t.stamp)
+        self._remember_tool(t.data.get("id"), node)
+
+    def _on_error(self, t: "_Turn", _kind: str) -> None:
+        text = str(t.data.get("text") or "")
+        node = self.add_node("error", _digest(text), text[:_MAX_LABEL], t.stamp)
+        failed_tool = self.meta["tool_nodes"][t.data["tool_use_id"]]
+        self.add_edge(failed_tool, "failed", node, t.stamp)
+        self._link_mentions(node, text, failed_tool, t.stamp)
+
+    def _on_todo(self, t: "_Turn", _kind: str) -> None:
+        items = [dict(item) for item in t.data.get("items") or [] if isinstance(item, dict)]
+        self.meta.setdefault("todos", {})[t.sid] = items
+        if _is_newer(t.ts, self.meta.get("last_todos")):
+            # A separate copy, so a later delta is applied to each list exactly once.
+            self.meta["last_todos"] = {"session": t.sid, "ts": t.ts, "items": [dict(item) for item in items]}
+
+    def _on_todo_delta(self, t: "_Turn", _kind: str) -> None:
+        _apply_todo_delta(self.meta.get("todos", {}).get(t.sid), t.data)
+        last = self.meta.get("last_todos")
+        if isinstance(last, dict) and last.get("session") == t.sid:
+            _apply_todo_delta(last.get("items"), t.data)
+            if _is_newer(t.ts, last):
+                last["ts"] = t.ts
+
+    def _on_usage(self, t: "_Turn", _kind: str) -> None:
+        if isinstance(t.data.get("context"), int):
+            t.session["context"] = t.data["context"]
+
+    _HANDLERS = {
+        "prompt": _on_prompt, "reply": _on_reply, "title": _on_title,
+        "edit": _on_file, "read": _on_file, "command": _on_command, "error": _on_error,
+        "todo": _on_todo, "todo_delta": _on_todo_delta, "usage": _on_usage,
+    }
 
     def _link_mentions(self, error_id: str, text: str, skip: str, stamp: str) -> None:
         """Inferred links from an error to known file nodes whose path (or file name) its text names."""

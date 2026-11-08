@@ -1,7 +1,6 @@
 """Incremental ingest of transcript JSONL files into the memory graph."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from memgraph.graph import Graph, write_json_atomic
@@ -54,21 +53,11 @@ def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
     files += [(p, True) for p in _oldest_first(root, "*/subagents/agent-*.jsonl")]
     for path, sidechain in files:
         key = path.relative_to(root).as_posix()
-        try:
-            with open(path, "rb") as fh:
-                size = fh.seek(0, 2)
-                offset = offsets.get(key, 0)
-                if not isinstance(offset, int) or offset < 0 or offset > size:
-                    offset = 0  # rewritten or truncated file: start over
-                fh.seek(offset)
-                chunk = fh.read()
-        except OSError:
+        read = _new_complete_lines(path, offsets.get(key, 0))
+        if read is None:
             continue
-        end = chunk.rfind(b"\n") + 1
-        for raw in chunk[:end].splitlines():
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
+        lines, offsets[key] = read
+        for line in lines:
             try:
                 events = parse_line(line)
             except Exception:
@@ -81,8 +70,26 @@ def ingest_dir(transcripts_dir: Path, graph: Graph, state: dict) -> int:
                 except Exception:
                     continue  # nor may one odd event
                 applied += 1
-        offsets[key] = offset + end
     return applied
+
+
+def _new_complete_lines(path: Path, offset) -> tuple[list[str], int] | None:
+    """(non-empty lines written since `offset`, new offset); None when the file can't be read.
+
+    Stops at the last newline, so a line still being written is left for next time.
+    An offset past the end (the file was rewritten or truncated) starts over at 0."""
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, 2)
+            if not isinstance(offset, int) or offset < 0 or offset > size:
+                offset = 0
+            fh.seek(offset)
+            chunk = fh.read()
+    except OSError:
+        return None
+    end = chunk.rfind(b"\n") + 1
+    lines = [raw.decode("utf-8", errors="replace").strip() for raw in chunk[:end].splitlines()]
+    return [line for line in lines if line], offset + end
 
 
 def _oldest_first(transcripts_dir: Path, pattern: str = "*.jsonl") -> list[Path]:

@@ -38,7 +38,7 @@ def memory_dir(cwd: Path) -> Path:
     It holds a `.gitignore` of `*` so graph.json (commands, prompts, errors)
     is never committed by accident; an existing .gitignore is left alone.
     """
-    d = Path(cwd) / ".claude" / "session-memory"
+    d = memory_path(cwd)
     d.mkdir(parents=True, exist_ok=True)
     try:
         with open(d / ".gitignore", "x", encoding="utf-8", newline="\n") as fh:
