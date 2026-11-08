@@ -11,14 +11,14 @@ import os
 import subprocess
 import sys
 import time
-import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from memgraph.graph import Graph, write_json_atomic
 from memgraph.guard import last_activity
 from memgraph.ingest import load_state, pack_size
 from memgraph.pack import write_pack
+from memgraph.store import log_error
 from memgraph.transcript import as_utc, parse_ts
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
@@ -244,16 +244,8 @@ def _extend_for_activity(mem_dir: Path, deadline_text: str, dl: datetime) -> boo
         write_json_atomic(mem_dir / WATCH_FILE, data)
         return True
     except Exception:
-        _log(mem_dir)
+        log_error(mem_dir)
         return False
-
-
-def _log(mem_dir: Path) -> None:
-    try:
-        with open(mem_dir / "error.log", "a", encoding="utf-8") as fh:
-            fh.write(f"{datetime.now(timezone.utc).isoformat()}\n{traceback.format_exc()}\n")
-    except Exception:
-        pass
 
 
 def _build_packs(mem_dir: Path, project: Path) -> None:
@@ -266,7 +258,7 @@ def _build_packs(mem_dir: Path, project: Path) -> None:
         else:
             target.unlink(missing_ok=True)
     except Exception:
-        _log(mem_dir)  # still warn: the session-start brief works without a pack
+        log_error(mem_dir)  # still warn: the session-start brief works without a pack
 
 
 def run_watcher(mem_dir: Path, project: Path, clock=time.time, sleep=time.sleep, notify=None) -> str:

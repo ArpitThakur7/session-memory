@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import tempfile
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -86,6 +87,22 @@ def write_text_atomic(path: Path, text: str) -> None:
 def write_json_atomic(path: Path, obj) -> None:
     """Write `obj` as compact JSON to `path` atomically (see atomic_file)."""
     write_text_atomic(path, json.dumps(obj, ensure_ascii=False))
+
+
+def log_error(mem: Path | None) -> None:
+    """Append the current traceback to `mem`/error.log, or to the temp folder when that fails.
+
+    Hooks and the MCP server must never crash Claude Code, so they log and carry on."""
+    text = traceback.format_exc()
+    targets = ([Path(mem) / "error.log"] if mem is not None else [])
+    targets.append(Path(tempfile.gettempdir()) / "session-memory-error.log")
+    for target in targets:
+        try:
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(f"{datetime.now(timezone.utc).isoformat()}\n{text}\n")
+            return
+        except Exception:
+            continue
 
 
 def append_event(mem_dir: Path, event: dict) -> None:

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import base64
 import json
-import tempfile
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
@@ -14,6 +12,7 @@ from memgraph.graph import Graph, GraphBusy, update
 from memgraph.ingest import memory_dir
 from memgraph.memory_ops import BUSY, DEFAULT_RECALL_BUDGET, REMEMBER_MAX_CHARS, TOO_LONG, recall_lines, remember
 from memgraph.pack import SIZES, build_pack
+from memgraph.store import log_error
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
 SERVER_VERSION = "0.2.0"
@@ -132,20 +131,6 @@ class _ParamError(Exception):
     pass
 
 
-def _log(mem: Path | None) -> None:
-    text = traceback.format_exc()
-    targets = ([Path(mem) / "error.log"] if mem is not None else []) + [
-        Path(tempfile.gettempdir()) / "session-memory-error.log"
-    ]
-    for target in targets:
-        try:
-            with open(target, "a", encoding="utf-8") as fh:
-                fh.write(f"{datetime.now(timezone.utc).isoformat()}\n{text}\n")
-            return
-        except Exception:
-            continue
-
-
 def _budget_arg(args: dict) -> int:
     budget = args.get("budget", DEFAULT_RECALL_BUDGET)
     if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 100_000:
@@ -158,53 +143,56 @@ def _text(s: str) -> dict:
 
 
 def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error: str = "") -> list[dict]:
+    """Run one tool and return its MCP content blocks. Bad arguments raise ValueError."""
     if name not in {t["name"] for t in TOOLS}:
         raise _ParamError(f"Unknown tool: {name}")
     if mem is None:
         raise RuntimeError(mem_error or "Memory folder unavailable")
     if name in CODE_TOOLS:
         return [_text(_code_text(name, args, mem, project))]
-    graph_path = mem / "graph.json"
-    graph = Graph.load(graph_path)  # re-read every call: the Stop hook keeps updating it
-    if name == "memory_brief":
-        return [_text(build_brief(graph, project_root=project, mem_dir=mem, footer=MCP_FOOTER) or "No project memory yet.")]
-    if name == "memory_recall":
-        query = args.get("query")
-        if not isinstance(query, str) or not query.strip():
-            raise ValueError("query must be a non-empty string")
-        query = query.strip()
-        budget = _budget_arg(args)
-        lines = recall_lines(graph, query, project, budget)
-        return [_text("\n".join(lines) if lines else f'Nothing found for "{query}".')]
-    if name in ("memory_explain", "memory_path"):
-        from memgraph.explore import explain_lines, path_lines
-
-        keys = ("thing",) if name == "memory_explain" else ("a", "b")
-        words = []
-        for key in keys:
-            value = args.get(key)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{key} must be a non-empty string")
-            words.append(value.strip())
-        budget = _budget_arg(args)
-        if name == "memory_path":
-            return [_text("\n".join(path_lines(graph, words[0], words[1], project, budget)))]
-        lines = explain_lines(graph, words[0], project, budget)
-        return [_text("\n".join(lines) if lines else f'Nothing found for "{words[0]}".')]
     if name == "memory_usage":
         return [_text(_usage_text(args, mem, project))]
     if name == "memory_remember":
-        text = args.get("text")
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("text must be a non-empty string")
-        text = text.strip()
-        if len(text) > REMEMBER_MAX_CHARS:
-            raise ValueError(TOO_LONG.format(n=len(text)))
-        try:
-            update(graph_path, lambda g: remember(g, text, datetime.now(timezone.utc)))
-        except GraphBusy:
-            raise RuntimeError(BUSY) from None
-        return [_text("Saved to project memory.")]
+        return _tool_remember(args, mem)
+    graph = Graph.load(mem / "graph.json")  # re-read every call: the Stop hook keeps updating it
+    return _GRAPH_TOOLS[name](graph, args, mem, project)
+
+
+def _required_text(args: dict, key: str) -> str:
+    value = args.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be a non-empty string")
+    return value.strip()
+
+
+def _lines_or_nothing(lines: list[str], word: str) -> list[dict]:
+    return [_text("\n".join(lines) if lines else f'Nothing found for "{word}".')]
+
+
+def _tool_brief(graph: Graph, args: dict, mem: Path, project: Path) -> list[dict]:
+    return [_text(build_brief(graph, project_root=project, mem_dir=mem, footer=MCP_FOOTER) or "No project memory yet.")]
+
+
+def _tool_recall(graph: Graph, args: dict, mem: Path, project: Path) -> list[dict]:
+    query = _required_text(args, "query")
+    return _lines_or_nothing(recall_lines(graph, query, project, _budget_arg(args)), query)
+
+
+def _tool_explain(graph: Graph, args: dict, mem: Path, project: Path) -> list[dict]:
+    from memgraph.explore import explain_lines
+
+    thing = _required_text(args, "thing")
+    return _lines_or_nothing(explain_lines(graph, thing, project, _budget_arg(args)), thing)
+
+
+def _tool_path(graph: Graph, args: dict, mem: Path, project: Path) -> list[dict]:
+    from memgraph.explore import path_lines
+
+    a, b = _required_text(args, "a"), _required_text(args, "b")
+    return [_text("\n".join(path_lines(graph, a, b, project, _budget_arg(args))))]
+
+
+def _tool_pack(graph: Graph, args: dict, mem: Path, project: Path) -> list[dict]:
     size = args.get("size", "standard")
     visual = args.get("visual", False)
     if size not in SIZES:
@@ -220,6 +208,23 @@ def _call_tool(name: str, args: dict, mem: Path | None, project: Path, mem_error
         else:
             content.append(_text("Visual pack unavailable: install Pillow"))
     return content
+
+
+def _tool_remember(args: dict, mem: Path) -> list[dict]:
+    text = _required_text(args, "text")
+    if len(text) > REMEMBER_MAX_CHARS:
+        raise ValueError(TOO_LONG.format(n=len(text)))
+    try:
+        update(mem / "graph.json", lambda g: remember(g, text, datetime.now(timezone.utc)))
+    except GraphBusy:
+        raise RuntimeError(BUSY) from None
+    return [_text("Saved to project memory.")]
+
+
+_GRAPH_TOOLS = {
+    "memory_brief": _tool_brief, "memory_recall": _tool_recall, "memory_explain": _tool_explain,
+    "memory_path": _tool_path, "memory_pack": _tool_pack,
+}
 
 
 def _code_text(name: str, args: dict, mem: Path, project: Path) -> str:
@@ -299,7 +304,7 @@ def _handle(msg, mem: Path | None, project: Path, mem_error: str = ""):
         except _ParamError as e:
             return err(-32602, str(e))
         except Exception as e:
-            _log(mem)
+            log_error(mem)
             return ok({"content": [_text(f"Error: {e}")], "isError": True})
     return err(-32601, f"Method not found: {method}")
 
@@ -311,7 +316,7 @@ def serve(stdin: BinaryIO, stdout: BinaryIO, project: Path) -> None:
     try:
         mem = memory_dir(project)
     except Exception as e:
-        _log(None)
+        log_error(None)
         mem_error = f"Memory folder unavailable: {e}"
 
     def send(obj) -> None:
@@ -335,7 +340,7 @@ def serve(stdin: BinaryIO, stdout: BinaryIO, project: Path) -> None:
                 continue
             resp = _handle(msg, mem, project, mem_error)
         except Exception:
-            _log(mem)
+            log_error(mem)
             rid = msg.get("id") if isinstance(msg, dict) else None
             resp = None if isinstance(msg, dict) and "id" not in msg else {
                 "jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": "Internal error"}}
@@ -343,4 +348,4 @@ def serve(stdin: BinaryIO, stdout: BinaryIO, project: Path) -> None:
             try:
                 send(resp)
             except Exception:
-                _log(mem)
+                log_error(mem)

@@ -6,35 +6,17 @@ import json
 import os
 import re
 import sys
-import tempfile
-import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
-from memgraph.store import existing_memory_dir, load_state, memory_dir, memory_path, project_root
+from memgraph.store import existing_memory_dir, load_state, log_error, memory_dir, memory_path, project_root
 
 if TYPE_CHECKING:
     from memgraph.graph import Graph
 
 # Everything else is imported where it is used: the Read hooks and the status line run on every
 # tool call or reply and must not pay for the graph, packs, map or token counter.
-
-
-def _log_error(mem: Path | None) -> None:
-    """Append the current traceback to error.log, or to the temp dir if that fails."""
-    text = traceback.format_exc()
-    targets = []
-    if mem is not None:
-        targets.append(Path(mem) / "error.log")
-    targets.append(Path(tempfile.gettempdir()) / "session-memory-error.log")
-    for target in targets:
-        try:
-            with open(target, "a", encoding="utf-8") as fh:
-                fh.write(f"{datetime.now(timezone.utc).isoformat()}\n{text}\n")
-            return
-        except Exception:
-            continue
 
 
 def _ingest(payload: dict, mem: Path) -> Graph:
@@ -93,7 +75,7 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
             savings.refresh_summary(Path(os.path.dirname(payload["transcript_path"])), mem, watch.ttl_minutes(),
                                     now)
         except Exception:
-            _log_error(mem)
+            log_error(mem)
     elif name == "hook-session-start":
         from memgraph.brief import build_brief
         from memgraph.ingest import pack_size
@@ -103,7 +85,7 @@ def _run_hook(name: str, payload: dict, mem: Path, stdout: TextIO, now: datetime
         try:  # the brief points at the pack, so it must show what the brief shows
             write_pack(graph, mem, pack_size(mem), root)
         except Exception:
-            _log_error(mem)  # the brief still works without a fresh pack; never point at a stale one
+            log_error(mem)  # the brief still works without a fresh pack; never point at a stale one
             try:
                 (mem / PACK_FILE).unlink(missing_ok=True)
             except OSError:
@@ -184,7 +166,7 @@ def _log_event(mem: Path, event: dict) -> None:
     try:
         append_event(mem, event)
     except Exception:
-        _log_error(mem)
+        log_error(mem)
 
 
 def _emit(stdout: TextIO, obj: dict) -> None:
@@ -307,7 +289,7 @@ def _map(args: list[str], stdout: TextIO) -> int:
     try:
         tokens = savings.token_view(transcripts_dir_for(project, mem), mem)
     except Exception:  # the map must still draw; the Tokens section then says why
-        _log_error(mem)
+        log_error(mem)
         tokens = {"available": False, "reason": "Token data could not be read (see error.log)."}
     path = write_map(graph, mem, project.name, project, tokens)
     stdout.write(f"Memory map: {path}\n")
@@ -426,7 +408,7 @@ def _watch(args: list[str]) -> int:
         mem = memory_dir(project)
         watch.run_watcher(mem, project)
     except Exception:
-        _log_error(mem)
+        log_error(mem)
     return 0
 
 
@@ -463,6 +445,26 @@ def _mcp(args: list[str]) -> int:
     return 0
 
 
+USAGE = """Usage: cli <command>
+  remember <text>                      save a decision to project memory
+  recall <word> [--budget N]           search project memory (N tokens, default 600)
+  explain <thing> [--budget N]         one memory note with its links
+  path <a> <b> [--budget N]            shortest chain of links between two notes
+  stats                                node, edge and session counts
+  map [--no-open]                      write (and open) the 3D memory map
+  pack [--size tiny|standard|deep] [--no-visual]
+  usage [--days N] [--by day|session|model|who|helper] [--json]
+  savings [--json]
+  audit [--project <dir>] [--json]
+  outline <path>
+  find-symbol <name> [--limit N]
+  doctor [--project <dir>] [--json]
+  setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local]
+  setup-statusline [--dry-run] [--force]
+  statusline | watch --project <dir> | mcp [--project <dir>]
+  hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact
+"""
+
 HOOKS = ("hook-stop", "hook-session-start", "hook-prompt", "hook-pre-read", "hook-post-read", "hook-compact")
 
 
@@ -480,7 +482,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
             mem = memory_dir(project_root(payload["cwd"]))  # one folder per project, even from a subfolder
             _run_hook(cmd, payload, mem, stdout, now)
         except Exception:
-            _log_error(mem)
+            log_error(mem)
         return 0
     if cmd == "statusline":
         from memgraph.statusline import statusline_main
@@ -526,7 +528,7 @@ def main(argv: list[str], stdin: TextIO, stdout: TextIO, now: datetime | None = 
         from memgraph.statusline import setup_statusline_main
 
         return setup_statusline_main(args, stdout)
-    stdout.write("Usage: cli (hook-stop | hook-session-start | hook-prompt | hook-pre-read | hook-post-read | hook-compact | statusline | setup-statusline [--dry-run] [--force] | remember <text> | recall <word> [--budget N] | explain <thing> [--budget N] | path <a> <b> [--budget N] | stats | map [--no-open] | pack [--size tiny|standard|deep] [--no-visual] | usage [--days N] [--by day|session|model|who|helper] [--json] | savings [--json] | audit [--project <dir>] [--json] | watch --project <dir> | mcp [--project <dir>] | outline <path> | find-symbol <name> [--limit N] | doctor [--project <dir>] [--json] | setup-mcp <claude|vscode|antigravity> [--project <dir>] [--dry-run] [--scope user|project|local])\n")
+    stdout.write(USAGE)
     return 2
 
 
