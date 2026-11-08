@@ -6,10 +6,15 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 
 ### Fixed
 
+- **`/recall` listed raw shell commands above your requests.** It matched by substring and sorted by time, so `recall context` gave 8 commands and 2 requests. It now ranks by kind (decision > request > error > file > command), prefers whole-word matches, dampens programs run all the time (IDF-style), folds near-identical commands into one `(+N similar)` line, shows at most 3 command lines, drops repeats by displayed text and shows paths relative to the project. The same lookup now gives the 2 requests first, then 3 command lines.
+- A watch test failed when `SESSION_MEMORY_CACHE_TTL_MIN` was set in the shell; tests now ignore it.
 - **Cache guard let model-running slash commands through.** Any prompt starting with `/` skipped the guard, so `/session-memory:memory-map` as the first message of a cold 886k-token chat rebuilt the whole cache (840,843 tokens written). Now only built-in commands that do not call the model (`/clear`, `/compact`, `/model`, `/help` and similar) pass; plugin commands, skills, custom commands and model-running built-ins (`/init`, `/review`, ...) are blocked once like a normal message. The block message now points to `/clear` and to the launcher command that opens the memory map without Claude.
 
 ### Added
 
+- **Link tags.** Every link in `graph.json` is `extracted` (seen in a chat turn) or `inferred` (guessed: an error naming a known file gets a `mentions` link). Shown in `/recall`, the brief's error lines, `explain`, `path` and the map (dashed); guess-only notes rank lower. `graph.json` now has `"schema_version": 2`; older graphs load unchanged and get tags from their relation. Idea from graphify (Apache-2.0/MIT), no code copied.
+- **Token budget for lookups.** `recall <word> [--budget N]` and the MCP `memory_recall` `budget` argument (default 600 tokens, about 4 characters each) stop at the cap with `… N more — narrow the word`.
+- **`explain <thing>` and `path <a> <b>`.** One note with its tagged links, or the shortest chain between two notes (BFS, through a session only when there is no closer link). CLI commands and MCP tools `memory_explain` and `memory_path`, both with `budget`.
 - **Installers.** `install.ps1` (Windows PowerShell 5.1 and 7) and `install.sh` (macOS, Linux, Git Bash) find Python, offer Pillow, install the plugin and run `doctor`. Both have a dry-run and an uninstall mode.
 - **`doctor`.** Checks Python, Pillow, plugin files, the `claude` CLI, the plugin install, transcripts, memory, the cache watcher and MCP setup, each with a one-line fix.
 - **`setup-mcp claude|vscode|antigravity`.** Adds the MCP server with a backup, an atomic write and `--dry-run`.
