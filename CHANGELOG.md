@@ -2,12 +2,13 @@
 
 All notable changes to this project are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.0
 
 ### Fixed
 
 - **`/recall` listed raw shell commands above your requests.** It matched by substring and sorted by time, so `recall context` gave 8 commands and 2 requests. It now ranks by kind (decision > request > error > file > command), prefers whole-word matches, dampens programs run all the time (IDF-style), folds near-identical commands into one `(+N similar)` line, shows at most 3 command lines, drops repeats by displayed text and shows paths relative to the project. The same lookup now gives the 2 requests first, then 3 command lines.
 - A watch test failed when `SESSION_MEMORY_CACHE_TTL_MIN` was set in the shell; tests now ignore it.
+- The test suite now passes on GitHub's Windows, macOS and Linux runners (Python 3.10–3.13): launcher and installer tests use Git for Windows' bash instead of the WSL stub, and no longer depend on where the runner keeps Python or how macOS resolves `/home`.
 - **Cache guard let model-running slash commands through.** Any prompt starting with `/` skipped the guard, so `/session-memory:memory-map` as the first message of a cold 886k-token chat rebuilt the whole cache (840,843 tokens written). Now only built-in commands that do not call the model (`/clear`, `/compact`, `/model`, `/help` and similar) pass; plugin commands, skills, custom commands and model-running built-ins (`/init`, `/review`, ...) are blocked once like a normal message. The block message now points to `/clear` and to the launcher command that opens the memory map without Claude.
 
 ### Added

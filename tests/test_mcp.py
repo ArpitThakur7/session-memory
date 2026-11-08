@@ -43,7 +43,7 @@ def test_initialize_echoes_version(tmp_path):
     assert r["result"] == {
         "protocolVersion": "2025-03-26",
         "capabilities": {"tools": {}},
-        "serverInfo": {"name": "session-memory", "version": "0.2.0"},
+        "serverInfo": {"name": "session-memory", "version": "0.3.0"},
     }
 
 

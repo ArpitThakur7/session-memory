@@ -15,7 +15,7 @@ from memgraph.pack import SIZES, build_pack
 from memgraph.store import log_error
 from memgraph.visual import IMAGE_FILE, has_story, render_visual_pack
 
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 TOOLS = [
