@@ -173,7 +173,13 @@ def test_project_slug_is_ascii_only():
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX path form")
 def test_project_slug_is_ascii_only_posix():
-    assert usage.project_slug(Path("/home/José/proj_é")) == "-home-Jos--proj--"
+    from pathlib import PurePosixPath
+
+    class FakePath(PurePosixPath):
+        def resolve(self):
+            return self  # a real resolve() turns /home into /System/Volumes/Data/home on macOS
+
+    assert usage.project_slug(FakePath("/home/José/proj_é")) == "-home-Jos--proj--"
 
 
 def test_helper_descriptions_are_redacted(tmp_path):

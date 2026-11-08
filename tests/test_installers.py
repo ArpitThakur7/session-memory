@@ -5,15 +5,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import posix_bash
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
+@pytest.mark.skipif(posix_bash() is None, reason="no usable bash")
 def test_install_sh_parses():
     text = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "\r" not in text
     # bytes, not text (text mode adds CR on Windows); stdin avoids path translation
-    r = subprocess.run(["bash", "-n"], input=text.encode("utf-8"), capture_output=True, timeout=60)
+    r = subprocess.run([posix_bash(), "-n"], input=text.encode("utf-8"), capture_output=True, timeout=60)
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
 
 

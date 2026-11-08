@@ -39,3 +39,24 @@ def copy_subagent_fixture(tmp_path: Path) -> Path:
     (d / "s1" / "subagents").mkdir(parents=True)
     shutil.copyfile(SUBAGENT_FIXTURE, d / "s1" / "subagents" / SUBAGENT_FIXTURE.name)
     return d
+
+
+def posix_bash() -> str | None:
+    """A bash that runs scripts on this filesystem, or None.
+
+    On Windows `bash` on PATH is often the WSL stub in System32 (another filesystem, and it
+    fails outright when no Linux is installed), so Git for Windows' bash is preferred."""
+    import os
+    import shutil
+
+    found = shutil.which("bash")
+    if os.name != "nt":
+        return found
+    git = shutil.which("git")
+    if git:
+        here = Path(git).resolve().parent  # Git/cmd, or Git/mingw64/bin
+        for root in (here.parent, here.parent.parent):
+            for candidate in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
+                if candidate.is_file():
+                    return str(candidate)
+    return found if found and "system32" not in found.lower() else None
